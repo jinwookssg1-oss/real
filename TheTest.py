@@ -66,16 +66,25 @@ while True: # 아래의 코드를 무한 반복한다.
     if key[pygame.K_d]:       # D: 오른쪽으로 이동
         posX += PlayerSpd
 
-# 2. 유니티의 Lerp 공식 적용: 현재 위치 = 현재 위치 + (목표 - 현재) * 속도
+    player_center_x = posX + (IML.Player.get_width() // 2)
+    player_center_y = posY + (IML.Player.get_height() // 2)
+    
+    target_camera_x = player_center_x - (ScreenX // 2)
+    target_camera_y = player_center_y - (ScreenY // 2)
+
+    # 3. Lerp 카메라 부드러운 이동 적용
     CameraPosX += (target_camera_x - CameraPosX) * lerp
     CameraPosY += (target_camera_y - CameraPosY) * lerp
 
+    # 4. 플레이어의 화면 상대 좌표 계산
     player_screen_x = posX - CameraPosX
-    player_screen_y = posY   - CameraPosY
-    # 3. 화면 그리기 (잔상이 남지 않도록 먼저 화면을 지워주는 것이 좋습니다)
-    displaysurf.fill((0, 0, 0)) # 예: 검은색 바탕으로 화면 청소 (생략 가능)
+    player_screen_y = posY - CameraPosY
+    
+    # 5. 화면 그리기 (렌더링 순서 주의: 배경 -> 캐릭터)
+    displaysurf.fill((0, 0, 0)) 
   
-    TileGene.draw(displaysurf,CameraPosX,CameraPosY)
+    # 타일 맵 그리기
+    TileGene.draw(displaysurf, CameraPosX, CameraPosY)
     displaysurf.blit(IML.Player, (player_screen_x,player_screen_y))
 
     
