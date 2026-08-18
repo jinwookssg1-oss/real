@@ -103,11 +103,26 @@ class TileGenerator:
     def get_tile_at(self, tile_x, tile_y):
         return self.map_data.get((tile_x, tile_y))
 
-    def is_point_visible_from(self, player_x, player_y, point_x, point_y, max_radius=250):
-        """월드 좌표의 점이 플레이어 시야 안에 있고, 벽에 가려지지 않았는지 검사합니다."""
+    def is_point_visible_from(self, player_x, player_y, point_x, point_y, max_radius=250, facing_angle_deg=None, cone_angle_deg=None):
+        """월드 좌표의 점이 플레이어 시야 안에 있고, 벽에 가려지지 않았는지 검사합니다.
+
+        추가 인자:
+        - facing_angle_deg: 플레이어가 바라보는 각도(도 단위). None이면 각도 검사 생략.
+        - cone_angle_deg: 시야 원뿔의 전체 각도(도 단위). None이면 360도(전방향)로 간주.
+        """
         dist = math.hypot(point_x - player_x, point_y - player_y)
         if dist > max_radius:
             return False
+
+        # 각도 기반 원뿔 검사 (옵션)
+        if facing_angle_deg is not None and cone_angle_deg is not None:
+            # 플레이어 -> 점으로 향하는 각도(도)
+            angle_to_point = math.degrees(math.atan2(point_y - player_y, point_x - player_x))
+            # 각도 차이를 -180..180 범위로 정규화
+            diff = ((angle_to_point - facing_angle_deg + 180) % 360) - 180
+            half = cone_angle_deg / 2.0
+            if abs(diff) > half:
+                return False
 
         steps = max(1, int(dist / 4))
         for i in range(1, steps + 1):
@@ -122,11 +137,14 @@ class TileGenerator:
 
         return True
 
-    def is_tile_visible_from(self, player_x, player_y, tile_world_x, tile_world_y, max_radius=250):
-        """타일의 중심에서 플레이어까지 직선으로 보이는지 확인. 벽이 있으면 가려짐."""
+    def is_tile_visible_from(self, player_x, player_y, tile_world_x, tile_world_y, max_radius=250, facing_angle_deg=None, cone_angle_deg=None):
+        """타일의 중심에서 플레이어까지 직선으로 보이는지 확인. 벽이 있으면 가려짐.
+
+        추가 인자는 `is_point_visible_from`와 동일하게 전달됩니다.
+        """
         center_x = tile_world_x + (self.tile_size // 2)
         center_y = tile_world_y + (self.tile_size // 2)
-        return self.is_point_visible_from(player_x, player_y, center_x, center_y, max_radius)
+        return self.is_point_visible_from(player_x, player_y, center_x, center_y, max_radius, facing_angle_deg=facing_angle_deg, cone_angle_deg=cone_angle_deg)
     
     def get_wall_rects(self, surface, camera_x, camera_y):
         """현재 화면 범위 안에 있는 집 벽 타일들의 '절대 좌표 Rect'를 추출 (시야 차단 연산 연동용)"""
