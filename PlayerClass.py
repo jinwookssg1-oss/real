@@ -3,7 +3,7 @@ from Config import *
 from ImageLoad import *
 
 class Player:
-    def __init__(self, x, y, size, IML: Imageload):
+    def __init__(self, x, y, size, IML: Imageload,tile_Gene = None):
         self.image = IML.GetPlayer()
         self.X = x
         self.Y = y
@@ -12,6 +12,8 @@ class Player:
         self.Hp = 100
         self.MaxHp = 100
         self.rect = self.image.get_rect(topleft=(x, y))
+
+        self.tile_generator = tile_Gene
 
         self.normal_speed = 5
         self.dash_speed = 15      # 대쉬 중일 때의 속도
@@ -33,6 +35,9 @@ class Player:
         p_height = self.rect.height
         self.head_hitbox = pygame.Rect(x + (p_width // 4), y, p_width // 2, p_height // 3)
         self.body_hitbox = pygame.Rect(x, y + (p_height // 3), p_width, (p_height // 3) * 2)
+
+    
+
 
     def handle_input(self):
         keys = pygame.key.get_pressed()
@@ -81,20 +86,49 @@ class Player:
             self.Move(final_dx, final_dy)
 
     def Move(self, dx, dy):
-        # 내부 좌표 갱신
-        self.X += dx
-        self.Y += dy
+        """이동 시 벽 충돌 감지를 수행합니다."""
+        # 내부 좌표 임시 갱신
+        new_x = self.X + dx
+        new_y = self.Y + dy
+        
+        # 임시로 히트박스 위치 업데이트 (충돌 검사용)
+        temp_head_hitbox = pygame.Rect(
+            int(new_x + (self.rect.width // 4)), 
+            int(new_y), 
+            self.rect.width // 2, 
+            self.rect.height // 3
+        )
+        temp_body_hitbox = pygame.Rect(
+            int(new_x), 
+            int(new_y + (self.rect.height // 3)), 
+            self.rect.width, 
+            (self.rect.height // 3) * 2
+        )
+        
+        # 타일 제너레이터가 있으면 충돌 감지
+        if self.tile_generator:
+            # 머리와 몸통 둘 다 확인
+            if self.tile_generator.check_collision(temp_head_hitbox) or \
+               self.tile_generator.check_collision(temp_body_hitbox):
+                # 충돌 발생 - 이동 취소
+                return False
+        
+        # 충돌 없음 - 실제 좌표 갱신
+        self.X = new_x
+        self.Y = new_y
         
         # 이미지 rect 이동
-        self.rect.x += dx
-        self.rect.y += dy
+        self.rect.x = int(self.X)
+        self.rect.y = int(self.Y)
         
-        # 두 히트박스 동시 이동 (이제 대쉬 속도에 맞춰 완벽하게 따라옵니다)
-        self.head_hitbox.x += dx
-        self.head_hitbox.y += dy
+        # 히트박스 위치 갱신
+        self.head_hitbox.x = int(new_x + (self.rect.width // 4))
+        self.head_hitbox.y = int(new_y)
         
-        self.body_hitbox.x += dx
-        self.body_hitbox.y += dy
+        self.body_hitbox.x = int(new_x)
+        self.body_hitbox.y = int(new_y + (self.rect.height // 3))
+        
+        return True
 
     def draw(self, surface, camera_x=0, camera_y=0):
         # 카메라 위치를 차감하여 화면용 상대 좌표 계산

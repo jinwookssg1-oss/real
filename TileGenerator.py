@@ -41,6 +41,26 @@ class TileGenerator:
         wall.blit(self.IML.GetTileTest(), (0, 0))  # 벽돌 텍스처 이미지 로드
         
         self.tile_images[1] = wall
+        
+        # -------------------------------------
+        # 2: 문 타일 (갈색, 열림 표시)
+        # -------------------------------------
+        door = pygame.Surface((self.tile_size, self.tile_size))
+        door.fill((140, 180, 130))  # 바닥색
+        pygame.draw.rect(door, (101, 67, 33), (10, 10, self.tile_size - 20, self.tile_size - 20))  # 문 모양
+        pygame.draw.rect(door, (255, 200, 100), (10, 10, self.tile_size - 20, self.tile_size - 20), 2)  # 테두리
+        pygame.draw.circle(door, (200, 150, 50), (self.tile_size - 20, self.tile_size // 2), 3)  # 손잡이
+        self.tile_images[2] = door
+        
+        # -------------------------------------
+        # 3: 보물상자 (황금색)
+        # -------------------------------------
+        treasure = pygame.Surface((self.tile_size, self.tile_size))
+        treasure.fill((140, 180, 130))  # 바닥색
+        pygame.draw.rect(treasure, (200, 150, 50), (15, 20, self.tile_size - 30, 25))  # 상자 본체
+        pygame.draw.rect(treasure, (255, 200, 0), (15, 20, self.tile_size - 30, 25), 2)  # 테두리
+        pygame.draw.line(treasure, (150, 100, 0), (self.tile_size // 2, 20), (self.tile_size // 2, 45), 2)  # 뚜껑
+        self.tile_images[3] = treasure
 
     def generate_map(self, width_tiles, height_tiles, seed_value=None):
         """★멀티플레이 동동화 핵심★: 서버 시드로 난수를 고정하여 모두에게 똑같은 집을 배치합니다."""
@@ -61,6 +81,8 @@ class TileGenerator:
                     self.map_data[(x, y)] = Tile(tile_type=1, is_walkable=False)
 
         # 3. 맵 중간중간 무작위 위치에 '집' 형태 구조물 빌드 (예: 12채 생성)
+        # ★ [개선] 집의 윤곽선만 벽으로 생성 (내부는 비워 플레이어가 드나들 수 있음)
+        # ★ [추가] 문과 보물상자 추가
         num_houses = 12
         for _ in range(num_houses):
             # 맵 중앙 안쪽 안전한 좌표 무작위 선택 (시드가 같으므로 결과값도 모든 유저가 완벽히 일치)
@@ -71,14 +93,39 @@ class TileGenerator:
             house_w = random.randint(3, 5)
             house_h = random.randint(3, 5)
             
-            # 선택한 범위에 사각형 모양으로 벽 타일(1)을 덮어씌워 집을 완성
+            # 플레이어 시작 지점 광장 근처(예: 타일 인덱스 20~27 사이)에는 집이 안 생기도록 처리
+            if 18 <= house_x <= 28 and 18 <= house_y <= 28:
+                continue
+            
+            # 집의 윤곽선만 벽으로 생성 (테두리만 1, 내부는 바닥 0)
             for hy in range(house_y, house_y + house_h):
                 for hx in range(house_x, house_x + house_w):
-                    # 플레이어 시작 지점 광장 근처(예: 타일 인덱스 20~27 사이)에는 집이 안 생기도록 처리
-                    # 이렇게 해야 플레이어들이 스폰될 때 집 벽에 끼이지 않습니다.
-                    if 18 <= hx <= 28 and 18 <= hy <= 28:
-                        continue
-                    self.map_data[(hx, hy)] = Tile(tile_type=1, is_walkable=False)
+                    # 집의 테두리(위, 아래, 좌, 우)만 벽으로 설정
+                    is_border = (hy == house_y or hy == house_y + house_h - 1 or 
+                                 hx == house_x or hx == house_x + house_w - 1)
+                    
+                    if is_border:
+                        self.map_data[(hx, hy)] = Tile(tile_type=1, is_walkable=False)
+                    else:
+                        # 내부는 바닥으로 유지 (집 내부는 이동 가능)
+                        self.map_data[(hx, hy)] = Tile(tile_type=0, is_walkable=True)
+            
+            # ★ [추가] 집에 문 배치 (테두리 중 랜덤한 위치, 4개 방향 중 선택)
+            door_sides = [
+                # (x, y) - 위, 아래, 좌, 우
+                (random.randint(house_x + 1, house_x + house_w - 2), house_y),  # 위쪽
+                (random.randint(house_x + 1, house_x + house_w - 2), house_y + house_h - 1),  # 아래쪽
+                (house_x, random.randint(house_y + 1, house_y + house_h - 2)),  # 좌측
+                (house_x + house_w - 1, random.randint(house_y + 1, house_y + house_h - 2))  # 우측
+            ]
+            door_pos = random.choice(door_sides)
+            self.map_data[door_pos] = Tile(tile_type=2, is_walkable=True)  # 문은 통과 가능
+            
+            # ★ [추가] 집에 확률적으로 보물상자 배치 (40% 확률)
+            if random.random() < 0.4 and house_w > 2 and house_h > 2:
+                treasure_x = random.randint(house_x + 1, house_x + house_w - 2)
+                treasure_y = random.randint(house_y + 1, house_y + house_h - 2)
+                self.map_data[(treasure_x, treasure_y)] = Tile(tile_type=3, is_walkable=True)  # 보물상자
 
     def draw(self, surface, camera_x, camera_y):
         """화면 컬링(Culling) 렌더링"""
@@ -149,3 +196,31 @@ class TileGenerator:
                     wall_rects.append(rect)
                     
         return wall_rects
+
+    def is_walkable(self, world_x, world_y):
+        """월드 좌표가 이동 가능한 지형인지 확인"""
+        tile_x = int(world_x // self.tile_size)
+        tile_y = int(world_y // self.tile_size)
+        tile = self.map_data.get((tile_x, tile_y))
+        
+        if tile is None:
+            return False  # 맵 범위 밖
+        
+        return tile.is_walkable
+    
+    def check_collision(self, rect):
+        """Rect와 벽이 충돌하는지 확인 (rect의 중심을 기준)"""
+        # Rect의 4개 모서리와 중심을 체크
+        points_to_check = [
+            (rect.left, rect.top),      # 좌상단
+            (rect.right, rect.top),     # 우상단
+            (rect.left, rect.bottom),   # 좌하단
+            (rect.right, rect.bottom),  # 우하단
+            (rect.centerx, rect.centery) # 중심
+        ]
+        
+        for x, y in points_to_check:
+            if not self.is_walkable(x, y):
+                return True  # 충돌 감지
+        
+        return False  # 충돌 없음
