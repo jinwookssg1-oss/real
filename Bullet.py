@@ -2,7 +2,7 @@ import pygame
 import math
 
 class Bullet:
-    def __init__(self, size=8):
+    def __init__(self, size=1):
         # 🌟 1. 총알 전용 독립된 작은 도화지(Surface)를 생성합니다.
         # SRCALPHA를 넣어야 총알 주변 배경이 투명해집니다.
         self.surface = pygame.Surface((size, size), pygame.SRCALPHA)

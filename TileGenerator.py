@@ -3,17 +3,32 @@ import random
 import math
 from ImageLoad import Imageload
 
+VISION_CIRCLE = "circle"
+VISION_CONE = "cone"
+VISION_RECTANGLE = "rectangle"
+VISION_LINE = "line"
+# [커스텀 가능] 타일 한 칸의 픽셀 크기입니다. 맵 해상도와 렌더링 비용에 영향을 줍니다.
+DEFAULT_TILE_SIZE = 16
+
 class Tile:
     def __init__(self, tile_type, is_walkable):
+        # [커스텀 가능] 새 타일 종류의 번호와 이동 가능 여부를 설정합니다.
         self.tile_type = tile_type
         self.is_walkable = is_walkable
 
 class TileGenerator:
-    def __init__(self, tile_size=64):
+    def __init__(self, tile_size=DEFAULT_TILE_SIZE):
         self.IML = Imageload()  # Imageload 인스턴스 생성
         self.tile_size = tile_size
-        self.tile_images = {}  # 타일 이미지 저장소
-        self.map_data = {}     # 맵 데이터 딕셔너리
+        # [커스텀 가능] 타일 번호별 Surface를 등록하는 딕셔너리입니다.
+        self.tile_images = {}
+        # [커스텀 가능] (타일 x, 타일 y): Tile 객체 형태의 맵 데이터입니다.
+        self.map_data = {}
+        self.map_width = 0
+        self.map_height = 0
+        self.world_surface = None
+        self._visibility_cache = {}
+        self._visibility_cache_key = None
         
         # 이미지 풀링 생성
         self._load_placeholder_images()
@@ -24,13 +39,14 @@ class TileGenerator:
 
     def _load_placeholder_images(self):
         """이미지 풀링: 바닥과 집 벽면 타일을 시각적으로 디자인"""
+        # [커스텀 가능] 아래 tile_images[번호] 블록에서 타일 색상, 텍스처, 모양을 변경합니다.
         # -------------------------------------
         # 0: 기본 바닥 (부드러운 잔디/흙 느낌의 연녹색)
         # -------------------------------------
         floor = pygame.Surface((self.tile_size, self.tile_size))
-        floor.fill((140, 180, 130)) # 연녹색 톤의 바닥 색상
+        floor.fill((140, 180, 130)) # [커스텀 가능] 바닥 기본 색상
         # 도트 느낌의 잔디 디테일 선 추가
-        pygame.draw.rect(floor, (130, 170, 120), (0, 0, self.tile_size, self.tile_size), 1)
+        pygame.draw.rect(floor, (130, 170, 120), (0, 0, self.tile_size, self.tile_size), 1) # [커스텀 가능]
         self.tile_images[0] = floor
 
         # -------------------------------------
@@ -38,7 +54,12 @@ class TileGenerator:
         # -------------------------------------
         wall = pygame.Surface((self.tile_size, self.tile_size))
         
-        wall.blit(self.IML.GetTileTest(), (0, 0))  # 벽돌 텍스처 이미지 로드
+        wall_texture = pygame.transform.scale(
+            self.IML.GetTileTest(),
+            (self.tile_size, self.tile_size),
+        )
+        wall.fill((140, 180, 130))  # 바닥색
+        wall.blit(wall_texture, (0, 0))
         
         self.tile_images[1] = wall
         
@@ -47,9 +68,11 @@ class TileGenerator:
         # -------------------------------------
         door = pygame.Surface((self.tile_size, self.tile_size))
         door.fill((140, 180, 130))  # 바닥색
-        pygame.draw.rect(door, (101, 67, 33), (10, 10, self.tile_size - 20, self.tile_size - 20))  # 문 모양
-        pygame.draw.rect(door, (255, 200, 100), (10, 10, self.tile_size - 20, self.tile_size - 20), 2)  # 테두리
-        pygame.draw.circle(door, (200, 150, 50), (self.tile_size - 20, self.tile_size // 2), 3)  # 손잡이
+        margin = max(3, self.tile_size // 6)
+        inner_width = self.tile_size - margin * 2
+        pygame.draw.rect(door, (101, 67, 33), (margin, margin, inner_width, inner_width))
+        pygame.draw.rect(door, (255, 200, 100), (margin, margin, inner_width, inner_width), 1)
+        pygame.draw.circle(door, (200, 150, 50), (self.tile_size - margin - 2, self.tile_size // 2), 2)
         self.tile_images[2] = door
         
         # -------------------------------------
@@ -57,9 +80,13 @@ class TileGenerator:
         # -------------------------------------
         treasure = pygame.Surface((self.tile_size, self.tile_size))
         treasure.fill((140, 180, 130))  # 바닥색
-        pygame.draw.rect(treasure, (200, 150, 50), (15, 20, self.tile_size - 30, 25))  # 상자 본체
-        pygame.draw.rect(treasure, (255, 200, 0), (15, 20, self.tile_size - 30, 25), 2)  # 테두리
-        pygame.draw.line(treasure, (150, 100, 0), (self.tile_size // 2, 20), (self.tile_size // 2, 45), 2)  # 뚜껑
+        chest_x = self.tile_size // 6
+        chest_y = self.tile_size // 3
+        chest_width = self.tile_size - chest_x * 2
+        chest_height = max(8, self.tile_size // 3)
+        pygame.draw.rect(treasure, (200, 150, 50), (chest_x, chest_y, chest_width, chest_height))
+        pygame.draw.rect(treasure, (255, 200, 0), (chest_x, chest_y, chest_width, chest_height), 1)
+        pygame.draw.line(treasure, (150, 100, 0), (self.tile_size // 2, chest_y), (self.tile_size // 2, chest_y + chest_height), 1)
         self.tile_images[3] = treasure
 
     def generate_map(self, width_tiles, height_tiles, seed_value=None):
@@ -68,6 +95,8 @@ class TileGenerator:
             random.seed(seed_value) # 👈 이 구문이 돌면서 모든 유저 컴퓨터의 난수 발생 순서가 고정됩니다.
 
         self.map_data.clear() # 기존 데이터 초기화
+        self.map_width = width_tiles
+        self.map_height = height_tiles
 
         # 1. 일단 전체 맵을 다 바닥(0)으로 초기화
         for y in range(height_tiles):
@@ -80,21 +109,21 @@ class TileGenerator:
                 if x == 0 or x == width_tiles - 1 or y == 0 or y == height_tiles - 1:
                     self.map_data[(x, y)] = Tile(tile_type=1, is_walkable=False)
 
-        # 3. 맵 중간중간 무작위 위치에 '집' 형태 구조물 빌드 (예: 12채 생성)
+        # 3. 맵 중간중간 무작위 위치에 '집' 형태 구조물 빌드
         # ★ [개선] 집의 윤곽선만 벽으로 생성 (내부는 비워 플레이어가 드나들 수 있음)
         # ★ [추가] 문과 보물상자 추가
-        num_houses = 12
+        num_houses = 48  # [커스텀 가능] 집 개수
         for _ in range(num_houses):
             # 맵 중앙 안쪽 안전한 좌표 무작위 선택 (시드가 같으므로 결과값도 모든 유저가 완벽히 일치)
-            house_x = random.randint(3, width_tiles - 10)
-            house_y = random.randint(3, height_tiles - 10)
+            house_x = random.randint(12, width_tiles - 32)
+            house_y = random.randint(12, height_tiles - 32)
             
-            # 생성할 집의 크기 설정 (가로 3~5칸, 세로 3~5칸 크기)
-            house_w = random.randint(3, 5)
-            house_h = random.randint(3, 5)
+            # 생성할 집의 크기 설정 (가로 12~20칸, 세로 12~20칸 크기)
+            house_w = random.randint(12, 20)  # [커스텀 가능] 집 최소/최대 너비
+            house_h = random.randint(12, 20)  # [커스텀 가능] 집 최소/최대 높이
             
             # 플레이어 시작 지점 광장 근처(예: 타일 인덱스 20~27 사이)에는 집이 안 생기도록 처리
-            if 18 <= house_x <= 28 and 18 <= house_y <= 28:
+            if 72 <= house_x <= 112 and 72 <= house_y <= 112:
                 continue
             
             # 집의 윤곽선만 벽으로 생성 (테두리만 1, 내부는 바닥 0)
@@ -127,53 +156,158 @@ class TileGenerator:
                 treasure_y = random.randint(house_y + 1, house_y + house_h - 2)
                 self.map_data[(treasure_x, treasure_y)] = Tile(tile_type=3, is_walkable=True)  # 보물상자
 
+        self._build_world_surface()
+        self._visibility_cache.clear()
+        self._visibility_cache_key = None
+
+    def _build_world_surface(self):
+        """정적인 맵을 한 장으로 합쳐 매 프레임 타일을 반복 그리지 않습니다."""
+        world_size = (
+            self.map_width * self.tile_size,
+            self.map_height * self.tile_size,
+        )
+        self.world_surface = pygame.Surface(world_size).convert()
+        for (tile_x, tile_y), tile in self.map_data.items():
+            self.world_surface.blit(
+                self.tile_images[tile.tile_type],
+                (tile_x * self.tile_size, tile_y * self.tile_size),
+            )
+
     def draw(self, surface, camera_x, camera_y):
-        """화면 컬링(Culling) 렌더링"""
-        screen_width, screen_height = surface.get_size()
-
-        start_x = max(0, int(camera_x // self.tile_size))
-        end_x = int((camera_x + screen_width) // self.tile_size) + 1
-        
-        start_y = max(0, int(camera_y // self.tile_size))
-        end_y = int((camera_y + screen_height) // self.tile_size) + 1
-
-        for y in range(start_y, end_y):
-            for x in range(start_x, end_x):
-                tile = self.map_data.get((x, y))
-                if tile:
-                    screen_x = x * self.tile_size - camera_x
-                    screen_y = y * self.tile_size - camera_y
-
-                    tile_img = self.tile_images[tile.tile_type]
-                    surface.blit(tile_img, (screen_x, screen_y))
+        """미리 합성한 월드 Surface를 카메라 위치에 맞춰 그립니다."""
+        if self.world_surface is not None:
+            surface.blit(self.world_surface, (-int(camera_x), -int(camera_y)))
 
     def get_tile_at(self, tile_x, tile_y):
         return self.map_data.get((tile_x, tile_y))
 
-    def is_point_visible_from(self, player_x, player_y, point_x, point_y, max_radius=250):
-        """월드 좌표의 점이 플레이어 시야 안에 있고, 벽에 가려지지 않았는지 검사합니다."""
-        dist = math.hypot(point_x - player_x, point_y - player_y)
-        if dist > max_radius:
+    def find_safe_spawn(self, min_x=1, max_x=None, min_y=1, max_y=None):
+        """플레이어 크기(2x2 타일)가 완전히 바닥인 스폰 위치를 찾습니다."""
+        max_x = max_x or self.map_width - 2
+        max_y = max_y or self.map_height - 2
+
+        def is_safe(x, y):
+            return all(
+                self.map_data.get((x + offset_x, y + offset_y))
+                and self.map_data[(x + offset_x, y + offset_y)].tile_type == 0
+                for offset_y in (0, 1)
+                for offset_x in (0, 1)
+            )
+
+        for _ in range(200):
+            spawn = (random.randint(min_x, max_x), random.randint(min_y, max_y))
+            if is_safe(*spawn):
+                return spawn
+
+        for y in range(min_y, max_y + 1):
+            for x in range(min_x, max_x + 1):
+                if is_safe(x, y):
+                    return x, y
+        return None
+
+    def _is_wall_between(self, start_x, start_y, end_x, end_y):
+        """두 점을 잇는 타일 경로에서 벽을 빠르게 찾습니다."""
+        start_tile_x = int(start_x // self.tile_size)
+        start_tile_y = int(start_y // self.tile_size)
+        end_tile_x = int(end_x // self.tile_size)
+        end_tile_y = int(end_y // self.tile_size)
+
+        delta_x = abs(end_tile_x - start_tile_x)
+        delta_y = abs(end_tile_y - start_tile_y)
+        step_x = 1 if start_tile_x < end_tile_x else -1
+        step_y = 1 if start_tile_y < end_tile_y else -1
+        error = delta_x - delta_y
+        tile_x, tile_y = start_tile_x, start_tile_y
+
+        while (tile_x, tile_y) != (end_tile_x, end_tile_y):
+            if (tile_x, tile_y) != (start_tile_x, start_tile_y):
+                tile = self.map_data.get((tile_x, tile_y))
+                if tile and tile.tile_type == 1:
+                    return True
+
+            double_error = error * 2
+            if double_error > -delta_y:
+                error -= delta_y
+                tile_x += step_x
+            if double_error < delta_x:
+                error += delta_x
+                tile_y += step_y
+
+        target_tile = self.map_data.get((end_tile_x, end_tile_y))
+        return bool(target_tile and target_tile.tile_type == 1)
+
+    def is_point_visible_from(
+        self,
+        player_x,
+        player_y,
+        point_x,
+        point_y,
+        max_radius=250,
+        vision_shape=VISION_CIRCLE,
+        direction_angle=0,
+        fov_angle=90,
+        vision_width=None,
+    ):
+        """시야 모양과 벽 가림을 함께 판정합니다."""
+        cache_key = (
+            int(player_x // self.tile_size),
+            int(player_y // self.tile_size),
+            int(point_x // self.tile_size),
+            int(point_y // self.tile_size),
+            max_radius,
+            vision_shape,
+            int(direction_angle // 10) if vision_shape != VISION_CIRCLE else 0,
+            fov_angle,
+            vision_width,
+        )
+        if cache_key in self._visibility_cache:
+            return self._visibility_cache[cache_key]
+
+        delta_x = point_x - player_x
+        delta_y = point_y - player_y
+        distance_squared = delta_x * delta_x + delta_y * delta_y
+        radius_squared = max_radius * max_radius
+        if distance_squared > radius_squared:
+            self._visibility_cache[cache_key] = False
             return False
 
-        steps = max(1, int(dist / 4))
-        for i in range(1, steps + 1):
-            t = i / steps
-            sample_x = player_x + (point_x - player_x) * t
-            sample_y = player_y + (point_y - player_y) * t
-            tile_x = int(sample_x // self.tile_size)
-            tile_y = int(sample_y // self.tile_size)
-            tile = self.map_data.get((tile_x, tile_y))
-            if tile and tile.tile_type == 1:
+        if vision_shape != VISION_CIRCLE:
+            angle = math.radians(direction_angle)
+            forward = delta_x * math.cos(angle) + delta_y * math.sin(angle)
+            side = -delta_x * math.sin(angle) + delta_y * math.cos(angle)
+            width = vision_width or max_radius * 0.5
+            width = min(width, 48) if vision_shape == VISION_LINE else width
+
+            shape_limits = {
+                VISION_CONE: (
+                    forward >= 0
+                    and abs(math.degrees(math.atan2(side, forward))) <= fov_angle / 2
+                ),
+                VISION_RECTANGLE: 0 <= forward <= max_radius and abs(side) <= width / 2,
+                VISION_LINE: 0 <= forward <= max_radius and abs(side) <= width / 2,
+            }
+            if not shape_limits.get(vision_shape, True):
+                self._visibility_cache[cache_key] = False
                 return False
 
-        return True
+        is_visible = not self._is_wall_between(player_x, player_y, point_x, point_y)
+        self._visibility_cache[cache_key] = is_visible
+        if len(self._visibility_cache) > 20000:
+            self._visibility_cache.clear()
+        return is_visible
 
-    def is_tile_visible_from(self, player_x, player_y, tile_world_x, tile_world_y, max_radius=250):
+    def is_tile_visible_from(self, player_x, player_y, tile_world_x, tile_world_y, max_radius=250, **vision_options):
         """타일의 중심에서 플레이어까지 직선으로 보이는지 확인. 벽이 있으면 가려짐."""
         center_x = tile_world_x + (self.tile_size // 2)
         center_y = tile_world_y + (self.tile_size // 2)
-        return self.is_point_visible_from(player_x, player_y, center_x, center_y, max_radius)
+        return self.is_point_visible_from(
+            player_x,
+            player_y,
+            center_x,
+            center_y,
+            max_radius,
+            **vision_options,
+        )
     
     def get_wall_rects(self, surface, camera_x, camera_y):
         """현재 화면 범위 안에 있는 집 벽 타일들의 '절대 좌표 Rect'를 추출 (시야 차단 연산 연동용)"""
