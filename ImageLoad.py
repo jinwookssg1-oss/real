@@ -27,6 +27,8 @@ class Imageload():
             os.path.join(current_dir, "Image", "HpBar.png")
         ).convert_alpha()
 
+        self.SkillWindow = pygame.image.load(os.path.join(current_dir,"Image","SkillWindow.png")).convert_alpha()
+
     # 2. 이미 크기가 줄어든 상태이므로 원본을 바로 리턴하면 됩니다.
     def GetShotGun(self, index=0):
         # index 인자를 주면 ShotGun[0]뿐만 아니라 다른 프레임(1~7)도 가져올 수 있어 확장성에 좋습니다.

@@ -30,11 +30,31 @@ class Player:
         self.dash_dir_x = 0
         self.dash_dir_y = 0
 
-        # 히트박스 최초 설정
-        p_width = self.rect.width
-        p_height = self.rect.height
-        self.head_hitbox = pygame.Rect(x + (p_width // 4), y, p_width // 2, p_height // 3)
-        self.body_hitbox = pygame.Rect(x, y + (p_height // 3), p_width, (p_height // 3) * 2)
+        self._update_hitboxes()
+
+    @staticmethod
+    def hitboxes_for_position(x, y, width, height):
+        """플레이어의 월드 좌표에서 머리/몸통 히트박스를 계산합니다."""
+        head = pygame.Rect(x + width // 4, y, width // 2, height // 3)
+        body = pygame.Rect(x, y + height // 3, width, (height // 3) * 2)
+        return head, body
+
+    def _update_hitboxes(self):
+        self.head_hitbox, self.body_hitbox = self.hitboxes_for_position(
+            self.X, self.Y, self.rect.width, self.rect.height
+        )
+
+    def check_bullet_hit(self, bullet_rect, damage):
+        """총알이 머리 또는 몸통에 닿으면 HP를 감소시키고 맞은 부위를 반환합니다."""
+        if self.head_hitbox.colliderect(bullet_rect):
+            hit_part = "head"
+        elif self.body_hitbox.colliderect(bullet_rect):
+            hit_part = "body"
+        else:
+            return None
+
+        self.Hp = max(0, self.Hp - max(0, int(damage)))
+        return hit_part
 
     
 
@@ -91,25 +111,15 @@ class Player:
         new_x = self.X + dx
         new_y = self.Y + dy
         
-        # 임시로 히트박스 위치 업데이트 (충돌 검사용)
-        temp_head_hitbox = pygame.Rect(
-            int(new_x + (self.rect.width // 4)), 
-            int(new_y), 
-            self.rect.width // 2, 
-            self.rect.height // 3
-        )
-        temp_body_hitbox = pygame.Rect(
-            int(new_x), 
-            int(new_y + (self.rect.height // 3)), 
-            self.rect.width, 
-            (self.rect.height // 3) * 2
+        next_head_hitbox, next_body_hitbox = self.hitboxes_for_position(
+            new_x, new_y, self.rect.width, self.rect.height
         )
         
         # 타일 제너레이터가 있으면 충돌 감지
         if self.tile_generator:
             # 머리와 몸통 둘 다 확인
-            if self.tile_generator.check_collision(temp_head_hitbox) or \
-               self.tile_generator.check_collision(temp_body_hitbox):
+            if self.tile_generator.check_collision(next_head_hitbox) or \
+               self.tile_generator.check_collision(next_body_hitbox):
                 # 충돌 발생 - 이동 취소
                 return False
         
@@ -122,11 +132,7 @@ class Player:
         self.rect.y = int(self.Y)
         
         # 히트박스 위치 갱신
-        self.head_hitbox.x = int(new_x + (self.rect.width // 4))
-        self.head_hitbox.y = int(new_y)
-        
-        self.body_hitbox.x = int(new_x)
-        self.body_hitbox.y = int(new_y + (self.rect.height // 3))
+        self._update_hitboxes()
         
         return True
 

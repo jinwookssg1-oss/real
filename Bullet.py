@@ -2,7 +2,7 @@ import pygame
 import math
 
 class Bullet:
-    def __init__(self, size=1):
+    def __init__(self, size=1, damage=10, owner_id=None):
         # 🌟 1. 총알 전용 독립된 작은 도화지(Surface)를 생성합니다.
         # SRCALPHA를 넣어야 총알 주변 배경이 투명해집니다.
         self.surface = pygame.Surface((size, size), pygame.SRCALPHA)
@@ -19,6 +19,12 @@ class Bullet:
         
         # 현재 이 총알이 화면에서 움직이고 있는 상태인가?
         self.is_active = False
+        self.damage = damage
+        self.owner_id = owner_id
+
+    @property
+    def rect(self):
+        return pygame.Rect(round(self.x), round(self.y), self.surface.get_width(), self.surface.get_height())
 
     def launch(self, start_x, start_y, target_x, target_y, speed=15):
         # 발사 위치 설정 (보통 플레이어의 화면 중심 좌표)
@@ -51,7 +57,7 @@ class Bullet:
             
             
 
-    def draw(self, display):
+    def draw(self, display, camera_x=0, camera_y=0):
         # 활성화 상태일 때만 메인 화면(display)에 총알 그리기
         if self.is_active:
-            display.blit(self.surface, (int(self.x), int(self.y)))
+            display.blit(self.surface, (int(self.x - camera_x), int(self.y - camera_y)))

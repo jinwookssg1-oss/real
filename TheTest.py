@@ -81,6 +81,8 @@ Weapon_Pos = (0, 0)
 
 running = True
 bullets = []
+remote_bullets = []
+processed_bullet_events = set()
 screen_shake = 0
 server_players = {}
 
@@ -93,8 +95,9 @@ vision_width = 220
 
 skill_window_open = False
 
-def draw_ui_gauge(surface, x, y, current_val, max_val, fill_color):
+def draw_ui_gauge(surface, x, y, current_val, max_val):
     """투명 중앙이 뚫린 HP 프레임 안쪽에 HP 게이지를 그립니다."""
+    
     frame_width, frame_height = HpBarFrame.get_size()
     ratio = max(0, min(current_val, max_val)) / max(1, max_val)
 
@@ -102,17 +105,32 @@ def draw_ui_gauge(surface, x, y, current_val, max_val, fill_color):
     inner_x = int(frame_width * 0.11)
     inner_y = int(frame_height * 0.34)
     inner_width = int(frame_width * 0.78)
-    inner_height = int(frame_height * 0.31)
+    inner_height = int(frame_height * 0.27)
+    
     inner_rect = pygame.Rect(x + inner_x, y + inner_y, inner_width, inner_height)
 
-    pygame.draw.rect(surface, (35, 35, 35), inner_rect)
+    # 1. 배경 사각형 그리기 (피가 달았을 때 비어있는 공간을 나타낼 어두운 색)
+    bg_color = pygame.Color("gray20")  # 어두운 회색 (또는 (40, 40, 40))
+    pygame.draw.rect(surface, bg_color, inner_rect)
+
+    # 2. 체력 비율에 따른 게이지 색상 결정 (인자 fill_color 대신 실시간 계산)
+    if current_val >= 100:
+        hp_color = pygame.Color("green")
+    elif current_val <= 80:
+        hp_color = pygame.Color("yellow")      # 체력이 80 이하로 떨어지면 빨간색
+    else:
+        hp_color = pygame.Color("red")   # 체력이 81~99 사이면 노란색
+        
+    # 3. 현재 체력만큼 게이지 채워 그리기
     fill_rect = inner_rect.copy()
     fill_rect.width = int(inner_rect.width * ratio)
+    
     if fill_rect.width > 0:
-        pygame.draw.rect(surface, fill_color, fill_rect)
+        pygame.draw.rect(surface, hp_color, fill_rect)
 
-    # 중앙 게이지 위에 테두리 이미지를 올려 프레임이 게이지를 감쌉니다.
+    # 4. 중앙 게이지 위에 테두리 이미지를 올려 프레임이 게이지를 감쌉니다.
     surface.blit(HpBarFrame, (x, y))
+
 
 
 def MainView():
@@ -172,19 +190,18 @@ def cycle_vision_shape():
 
 def fire_bullet():
     global bullets, screen_shake
-    new_bullet = Bullet(30)
-    center_x, center_y = get_player_screen_center(
+    new_bullet = Bullet(30, damage=10, owner_id=my_id)
+    center_x, center_y = get_player_world_center(
         my_player.X,
         my_player.Y,
         IML.Player.get_width(),
         IML.Player.get_height(),
-        CameraPosX,
-        CameraPosY,
     )
+    target_x, target_y = screen_to_world(Weapon_Pos[0], Weapon_Pos[1], CameraPosX, CameraPosY)
     gun_angle = math.radians(Weapon_Angle)
     muzzle_x = center_x + math.cos(gun_angle) * 40
     muzzle_y = center_y + math.sin(gun_angle) * 40
-    new_bullet.launch(muzzle_x, muzzle_y, Weapon_Pos[0], Weapon_Pos[1])
+    new_bullet.launch(muzzle_x, muzzle_y, target_x, target_y)
     new_bullet.just_fired = True
     bullets.append(new_bullet)
     screen_shake = 15
@@ -239,7 +256,7 @@ def handle_game_events():
 
 def GameView():
     global running, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos
-    global screen_shake, server_players, bullets, MousePos
+    global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos
 
     MousePos = pygame.mouse.get_pos()
     handle_game_events()
@@ -326,8 +343,45 @@ def GameView():
 
     for bullet in bullets:
         bullet.update()
-        bullet.draw(display)
+        bullet.draw(display, CameraPosX, CameraPosY)
+
+        if bullet.is_active:
+            for p_id, p_info in server_players.items():
+                if int(p_id) == my_id:
+                    continue
+                head, body = Player.hitboxes_for_position(
+                    p_info["posX"], p_info["posY"], IML.Player.get_width(), IML.Player.get_height()
+                )
+                if head.colliderect(bullet.rect) or body.colliderect(bullet.rect):
+                    bullet.is_active = False
+                    break
     bullets = [b for b in bullets if b.is_active]
+
+    # 서버 스냅샷에는 같은 발사 이벤트가 모든 플레이어 항목에 포함될 수
+    # 있으므로 event_id 기준으로 한 번만 생성합니다.
+    for p_info in server_players.values():
+        for bullet_info in p_info.get("bullets", []):
+            event_id = bullet_info.get("event_id")
+            if event_id in processed_bullet_events:
+                continue
+            processed_bullet_events.add(event_id)
+            if bullet_info.get("owner_id") == my_id:
+                continue
+            enemy_bullet = Bullet(30, damage=10, owner_id=bullet_info.get("owner_id"))
+            angle = math.radians(bullet_info.get("angle", 0.0))
+            enemy_bullet.launch(
+                bullet_info["x"], bullet_info["y"],
+                bullet_info["x"] + math.cos(angle) * 1000,
+                bullet_info["y"] + math.sin(angle) * 1000,
+            )
+            remote_bullets.append(enemy_bullet)
+
+    for bullet in remote_bullets:
+        bullet.update()
+        if bullet.is_active and my_player.check_bullet_hit(bullet.rect, bullet.damage):
+            bullet.is_active = False
+        bullet.draw(display, CameraPosX, CameraPosY)
+    remote_bullets = [b for b in remote_bullets if b.is_active]
 
     # 다른 플레이어 그리기
     for p_id, p_info in server_players.items():
@@ -394,7 +448,7 @@ def GameView():
     # =================================================================
     ui_x = 30
     ui_y = 80  
-    draw_ui_gauge(display, ui_x, ui_y, my_player.Hp, my_player.MaxHp, (255, 50, 50))
+    draw_ui_gauge(display, ui_x, ui_y, my_player.Hp, my_player.MaxHp)
     
     hp_text = GuiFont.render(f"HP: {my_player.Hp} / {my_player.MaxHp}", True, (255, 255, 255))
     display.blit(hp_text, (ui_x + HP_FRAME_SIZE[0] + 15, ui_y + 42))

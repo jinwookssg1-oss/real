@@ -14,6 +14,8 @@ server.listen()
 # 서버가 총괄하는 플레이어들의 실시간 딕셔너리
 players = {}
 player_lock = threading.Lock()
+bullet_events = []
+next_bullet_event_id = 1
 player_count = 0
 next_player_id = 1
 
@@ -33,11 +35,16 @@ def get_next_player_id():
 
 
 def handle_client(conn, player_id):
+    global next_bullet_event_id
+    with player_lock:
+        # 접속 전에 발생한 총알은 새 플레이어에게 전달하지 않습니다.
+        last_sent_bullet_event_id = next_bullet_event_id - 1
+
     # 1. 접속한 클라이언트에게 고유 아이디 부여
     conn.send(pickle.dumps({"init_id": player_id, "seed": 12345}))  # 초기 데이터 전송 (아이디, 시드 등)
 
     # 플레이어 초기값 세팅
-    players[player_id] = {"posX": 0, "posY": 0, "angle": 0.0}
+    players[player_id] = {"posX": 0, "posY": 0, "angle": 0.0, "hp": 100, "bullets": []}
 
     try:
         while True:
@@ -52,10 +59,28 @@ def handle_client(conn, player_id):
             players[player_id]["posX"] = client_data["posX"]
             players[player_id]["posY"] = client_data["posY"]
             players[player_id]["angle"] = client_data["angle"]
+            players[player_id]["hp"] = max(0, client_data.get("hp", 100))
+
+            with player_lock:
+                for bullet in client_data.get("bullets", []):
+                    bullet_event = dict(bullet)
+                    bullet_event["owner_id"] = player_id
+                    bullet_event["event_id"] = next_bullet_event_id
+                    next_bullet_event_id += 1
+                    bullet_events.append(bullet_event)
 
 
             # 4. 현재 접속한 모든 유저들의 데이터를 통째로 패킹해서 응답
-            conn.sendall(pickle.dumps(players))
+            snapshot = pickle.loads(pickle.dumps(players))
+            pending_bullets = [
+                bullet for bullet in bullet_events
+                if bullet["event_id"] > last_sent_bullet_event_id
+            ]
+            if pending_bullets:
+                last_sent_bullet_event_id = pending_bullets[-1]["event_id"]
+            for player in snapshot.values():
+                player["bullets"] = list(pending_bullets)
+            conn.sendall(pickle.dumps(snapshot))
     except Exception as e:
         print(f"[네트워크 오류] 플레이어 {player_id}번: {e}")
     finally:
