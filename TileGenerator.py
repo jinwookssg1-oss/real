@@ -8,7 +8,7 @@ VISION_CONE = "cone"
 VISION_RECTANGLE = "rectangle"
 VISION_LINE = "line"
 # [커스텀 가능] 타일 한 칸의 픽셀 크기입니다. 맵 해상도와 렌더링 비용에 영향을 줍니다.
-DEFAULT_TILE_SIZE = 16
+DEFAULT_TILE_SIZE = 32
 
 class Tile:
     def __init__(self, tile_type, is_walkable):

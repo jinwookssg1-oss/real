@@ -136,17 +136,20 @@ class Player:
         
         return True
 
-    def draw(self, surface, camera_x=0, camera_y=0):
+    def draw(self, surface, camera_x=0, camera_y=0, zoom=1.0):
         # 카메라 위치를 차감하여 화면용 상대 좌표 계산
-        screen_x = self.rect.x - camera_x
-        screen_y = self.rect.y - camera_y
+        screen_x = (self.rect.x - camera_x) * zoom
+        screen_y = (self.rect.y - camera_y) * zoom
         
         # 화면 좌표 기준 캐릭터 렌더링
-        surface.blit(self.image, (screen_x, screen_y))
+        image = self.image if zoom == 1.0 else pygame.transform.scale(
+            self.image, (max(1, round(self.image.get_width() * zoom)), max(1, round(self.image.get_height() * zoom)))
+        )
+        surface.blit(image, (screen_x, screen_y))
         
         # 시각적 확인용 화면 렌더링용 Rect 계산
-        render_head = pygame.Rect(self.head_hitbox.x - camera_x, self.head_hitbox.y - camera_y, self.head_hitbox.width, self.head_hitbox.height)
-        render_body = pygame.Rect(self.body_hitbox.x - camera_x, self.body_hitbox.y - camera_y, self.body_hitbox.width, self.body_hitbox.height)
+        render_head = pygame.Rect((self.head_hitbox.x - camera_x) * zoom, (self.head_hitbox.y - camera_y) * zoom, self.head_hitbox.width * zoom, self.head_hitbox.height * zoom)
+        render_body = pygame.Rect((self.body_hitbox.x - camera_x) * zoom, (self.body_hitbox.y - camera_y) * zoom, self.body_hitbox.width * zoom, self.body_hitbox.height * zoom)
         
         # 화면에 히트박스 테두리 그리기 (머리: 노랑, 몸통: 초록)
         pygame.draw.rect(surface, (255, 255, 0), render_head, 2)

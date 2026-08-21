@@ -9,7 +9,7 @@ class Bullet:
 
         
         # 🌟 2. 자기 자신(Surface)의 중심에 흰색 원을 그립니다.
-        self.bullet = pygame.draw.circle(self.surface, pygame.Color("Yellow"), (size // 2, size // 2), size // 2)
+        self.bullet = pygame.draw.circle(self.surface, pygame.Color("Yellow"), (size // 2, size // 2), 1)
         
         # 좌표 및 속도 초기화
         self.x = 0
@@ -57,7 +57,12 @@ class Bullet:
             
             
 
-    def draw(self, display, camera_x=0, camera_y=0):
+    def draw(self, display, camera_x=0, camera_y=0, zoom=1.0):
         # 활성화 상태일 때만 메인 화면(display)에 총알 그리기
         if self.is_active:
-            display.blit(self.surface, (int(self.x - camera_x), int(self.y - camera_y)))
+            if zoom == 1.0:
+                display.blit(self.surface, (int(self.x - camera_x), int(self.y - camera_y)))
+            else:
+                size = max(1, round(self.surface.get_width() * zoom))
+                image = pygame.transform.scale(self.surface, (size, size))
+                display.blit(image, (round((self.x - camera_x) * zoom), round((self.y - camera_y) * zoom)))

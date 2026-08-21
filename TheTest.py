@@ -74,6 +74,8 @@ send_data = {
 
 CameraPosX = 0
 CameraPosY = 0
+camera_fov = max(1.0, min(CAMERA_FOV, CAMERA_FOV_MAX))
+camera_zoom = 1.0 / camera_fov
 lerp = 0.05
 
 Weapon_Angle = 0
@@ -190,14 +192,14 @@ def cycle_vision_shape():
 
 def fire_bullet():
     global bullets, screen_shake
-    new_bullet = Bullet(30, damage=10, owner_id=my_id)
+    new_bullet = Bullet(5, damage=10, owner_id=my_id)
     center_x, center_y = get_player_world_center(
         my_player.X,
         my_player.Y,
         IML.Player.get_width(),
         IML.Player.get_height(),
     )
-    target_x, target_y = screen_to_world(Weapon_Pos[0], Weapon_Pos[1], CameraPosX, CameraPosY)
+    target_x, target_y = screen_to_world(Weapon_Pos[0], Weapon_Pos[1], CameraPosX, CameraPosY, camera_zoom)
     gun_angle = math.radians(Weapon_Angle)
     muzzle_x = center_x + math.cos(gun_angle) * 40
     muzzle_y = center_y + math.sin(gun_angle) * 40
@@ -255,7 +257,7 @@ def handle_game_events():
 
 
 def GameView():
-    global running, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos
+    global running, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos, camera_fov, camera_zoom
     global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos
 
     MousePos = pygame.mouse.get_pos()
@@ -263,6 +265,12 @@ def GameView():
     Weapon_Pos = pygame.mouse.get_pos()
     
     my_player.handle_input()
+
+    # 달리기(LSHIFT) 중에는 잠깐 시야를 넓히되 최대값을 넘지 않습니다.
+    target_fov = SPRINT_CAMERA_FOV if my_player.is_dashing else CAMERA_FOV
+    target_fov = min(target_fov, CAMERA_FOV_MAX)
+    camera_fov += (target_fov - camera_fov) * CAMERA_FOV_SMOOTH
+    camera_zoom = 1.0 / camera_fov
     
     # ★ [정리] 서버 데이터 동기화 - 필요한 움직임 데이터만 전송
     send_data["posX"] = my_player.X
@@ -299,7 +307,7 @@ def GameView():
 
     # 카메라 이동
     player_center_x, player_center_y = get_player_world_center(my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height())
-    target_camera_x, target_camera_y = get_camera_target(player_center_x, player_center_y, ScreenX, ScreenY)
+    target_camera_x, target_camera_y = get_camera_target(player_center_x, player_center_y, ScreenX, ScreenY, camera_zoom)
     CameraPosX += (target_camera_x - CameraPosX) * lerp
     CameraPosY += (target_camera_y - CameraPosY) * lerp
 
@@ -308,11 +316,14 @@ def GameView():
         CameraPosY += random.randint(-screen_shake, screen_shake)
         screen_shake -= 1
 
-    player_screen_x, player_screen_y = world_to_screen(my_player.X, my_player.Y, CameraPosX, CameraPosY)
-    player_center_screen_x, player_center_screen_y = get_player_screen_center(my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(), CameraPosX, CameraPosY)
+    player_screen_x, player_screen_y = world_to_screen(my_player.X, my_player.Y, CameraPosX, CameraPosY, camera_zoom)
+    player_center_screen_x, player_center_screen_y = get_player_screen_center(my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(), CameraPosX, CameraPosY, camera_zoom)
 
     Weapon_Angle = Tool.GetAtn2Angle_Degrees((player_center_screen_x, player_center_screen_y), Weapon_Pos)
-    rotated_shotgun = pygame.transform.rotate(IML.ShotGun[0], -Weapon_Angle)
+    shotgun_image = IML.ShotGun[0] if camera_zoom == 1.0 else pygame.transform.smoothscale(
+        IML.ShotGun[0], (round(IML.ShotGun[0].get_width() * camera_zoom), round(IML.ShotGun[0].get_height() * camera_zoom))
+    )
+    rotated_shotgun = pygame.transform.rotate(shotgun_image, -Weapon_Angle)
     Shotgun_rect = rotated_shotgun.get_rect()
     Shotgun_rect.center = (player_center_screen_x, player_center_screen_y)
 
@@ -343,7 +354,7 @@ def GameView():
 
     for bullet in bullets:
         bullet.update()
-        bullet.draw(display, CameraPosX, CameraPosY)
+        bullet.draw(display, CameraPosX, CameraPosY, camera_zoom)
 
         if bullet.is_active:
             for p_id, p_info in server_players.items():
@@ -380,7 +391,7 @@ def GameView():
         bullet.update()
         if bullet.is_active and my_player.check_bullet_hit(bullet.rect, bullet.damage):
             bullet.is_active = False
-        bullet.draw(display, CameraPosX, CameraPosY)
+        bullet.draw(display, CameraPosX, CameraPosY, camera_zoom)
     remote_bullets = [b for b in remote_bullets if b.is_active]
 
     # 다른 플레이어 그리기
@@ -392,17 +403,23 @@ def GameView():
         if not is_visible(other_world_x, other_world_y):
             continue
 
-        other_screen_x, other_screen_y = world_to_screen(p_info["posX"], p_info["posY"], CameraPosX, CameraPosY)
-        display.blit(IML.Player, (other_screen_x, other_screen_y))
+        other_screen_x, other_screen_y = world_to_screen(p_info["posX"], p_info["posY"], CameraPosX, CameraPosY, camera_zoom)
+        other_image = IML.Player if camera_zoom == 1.0 else pygame.transform.scale(
+            IML.Player, (round(IML.Player.get_width() * camera_zoom), round(IML.Player.get_height() * camera_zoom))
+        )
+        display.blit(other_image, (other_screen_x, other_screen_y))
 
-        other_center_x, other_center_y = get_player_screen_center(p_info["posX"], p_info["posY"], IML.Player.get_width(), IML.Player.get_height(), CameraPosX, CameraPosY)
-        other_rotated_gun = pygame.transform.rotate(IML.GetShotGun(), -p_info["angle"])
+        other_center_x, other_center_y = get_player_screen_center(p_info["posX"], p_info["posY"], IML.Player.get_width(), IML.Player.get_height(), CameraPosX, CameraPosY, camera_zoom)
+        other_gun = IML.GetShotGun() if camera_zoom == 1.0 else pygame.transform.scale(
+            IML.GetShotGun(), (round(IML.GetShotGun().get_width() * camera_zoom), round(IML.GetShotGun().get_height() * camera_zoom))
+        )
+        other_rotated_gun = pygame.transform.rotate(other_gun, -p_info["angle"])
         other_gun_rect = other_rotated_gun.get_rect()
         other_gun_rect.center = (other_center_x, other_center_y)
         display.blit(other_rotated_gun, other_gun_rect)
 
     # 내 캐릭터 및 무기 그리기
-    my_player.draw(display, CameraPosX, CameraPosY)
+    my_player.draw(display, CameraPosX, CameraPosY, camera_zoom)
     display.blit(rotated_shotgun, Shotgun_rect)
 
 
@@ -412,10 +429,10 @@ def GameView():
     dark_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
     dark_overlay.fill((0, 0, 0, 0))
 
-    start_tile_x = max(0, int((CameraPosX // TileGene.tile_size) - 2))
-    end_tile_x = int(((CameraPosX + ScreenX) // TileGene.tile_size) + 2)
-    start_tile_y = max(0, int((CameraPosY // TileGene.tile_size) - 2))
-    end_tile_y = int(((CameraPosY + ScreenY) // TileGene.tile_size) + 2)
+    start_tile_x = max(0, int(CameraPosX // TileGene.tile_size))
+    end_tile_x = min(TileGene.map_width, int((CameraPosX + ScreenX / camera_zoom) // TileGene.tile_size) + 1)
+    start_tile_y = max(0, int(CameraPosY // TileGene.tile_size))
+    end_tile_y = min(TileGene.map_height, int((CameraPosY + ScreenY / camera_zoom) // TileGene.tile_size) + 1)
 
 
     # 시야 범위 밖의 타일을 검게 덮기 / 타일 객체 순환하면서 시야밖에 있다면 검고 투명한 색으로 전환
@@ -427,8 +444,8 @@ def GameView():
 
             world_x = tile_x * TileGene.tile_size
             world_y = tile_y * TileGene.tile_size
-            screen_x = world_x - CameraPosX
-            screen_y = world_y - CameraPosY
+            screen_x = (world_x - CameraPosX) * camera_zoom
+            screen_y = (world_y - CameraPosY) * camera_zoom
 
             if not is_visible(
                 world_x + TileGene.tile_size // 2,
@@ -437,7 +454,7 @@ def GameView():
                 pygame.draw.rect(
                     dark_overlay,
                     (0, 0, 0, 200),
-                    pygame.Rect(screen_x, screen_y, TileGene.tile_size, TileGene.tile_size)
+                    pygame.Rect(screen_x, screen_y, TileGene.tile_size * camera_zoom, TileGene.tile_size * camera_zoom)
                 )
 
     display.blit(dark_overlay, (0, 0))
@@ -484,6 +501,8 @@ def GameView():
     vision_status = f"시야: {current_vision_shape} [V]"
     vision_text = GuiFont.render(vision_status, True, (255, 220, 120))
     display.blit(vision_text, (ScreenX - 300, 55))
+    fov_text = GuiFont.render(f"카메라 FOV: {camera_fov:.2f} / 최대 {CAMERA_FOV_MAX:.2f}", True, (180, 230, 255))
+    display.blit(fov_text, (ScreenX - 420, 90))
     # ------------------ [그리기 끝] ------------------
 
 
