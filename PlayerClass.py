@@ -53,7 +53,11 @@ class Player:
         else:
             return None
 
-        self.Hp = max(0, self.Hp - max(0, int(damage)))
+        if hit_part == "head":
+
+            self.Hp = max(0, self.Hp - max(0, int(damage)) * 10) # 헤드샷이 즉사였나
+        elif hit_part == "body":
+            self.Hp = max(0,self.Hp - max(0,int(damage)))
         return hit_part
 
     
@@ -147,10 +151,3 @@ class Player:
         )
         surface.blit(image, (screen_x, screen_y))
         
-        # 시각적 확인용 화면 렌더링용 Rect 계산
-        render_head = pygame.Rect((self.head_hitbox.x - camera_x) * zoom, (self.head_hitbox.y - camera_y) * zoom, self.head_hitbox.width * zoom, self.head_hitbox.height * zoom)
-        render_body = pygame.Rect((self.body_hitbox.x - camera_x) * zoom, (self.body_hitbox.y - camera_y) * zoom, self.body_hitbox.width * zoom, self.body_hitbox.height * zoom)
-        
-        # 화면에 히트박스 테두리 그리기 (머리: 노랑, 몸통: 초록)
-        pygame.draw.rect(surface, (255, 255, 0), render_head, 2)
-        pygame.draw.rect(surface, (0, 255, 0), render_body, 2)

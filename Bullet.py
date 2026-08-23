@@ -2,7 +2,7 @@ import pygame
 import math
 
 class Bullet:
-    def __init__(self, size=1, damage=10, owner_id=None):
+    def __init__(self, size=1, damage=10, owner_id=None, weapon_id="pistol"):
         # 🌟 1. 총알 전용 독립된 작은 도화지(Surface)를 생성합니다.
         # SRCALPHA를 넣어야 총알 주변 배경이 투명해집니다.
         self.surface = pygame.Surface((size, size), pygame.SRCALPHA)
@@ -21,6 +21,8 @@ class Bullet:
         self.is_active = False
         self.damage = damage
         self.owner_id = owner_id
+        self.weapon_id = weapon_id
+        self.angle = 0.0
 
     @property
     def rect(self):
@@ -37,6 +39,7 @@ class Bullet:
         
         # 🌟 4. atan2를 이용해 목표물까지의 정확한 각도(라디안) 계산
         angle_rad = math.atan2(dy, dx)
+        self.angle = math.degrees(angle_rad)
         
         # 🌟 5. 삼각함수를 이용해 매 프레임 이동할 X축, Y축 속도 분할 분배
         self.speed_x = math.cos(angle_rad) * speed

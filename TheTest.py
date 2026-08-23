@@ -11,6 +11,7 @@ import pickle
 from PlayerClass import Player
 from Tool_Cordinate import *
 from SkillAndSlot import *
+from Weapon import WeaponState, WEAPONS, WEAPON_KEYS
 
 fps = 64
 
@@ -35,6 +36,7 @@ print(f"내 아이디:{my_id}번 입니다.")
 
 map = random.seed(init_data["seed"])  # 시드 고정
 IML = Imageload()
+set_ui_assets(IML.SkillWindow, IML.QuickSlot)
 TileGene = TileGenerator()
 # [커스텀 가능] 맵 가로/세로 타일 수입니다. 타일 크기와 곱해 전체 월드 크기가 결정됩니다.
 TileGene.generate_map(200, 200, seed_value=init_data["seed"])
@@ -67,6 +69,9 @@ send_data = {
     
     # 무기 정보
     "angle": 0.0,       # 무기(총) 각도
+    "weapon_id": "pistol",
+    "magazine_ammo": 12,
+    "reserve_ammo": 36,
     
     # 발사한 총알 정보 (여러 개 가능)
     "bullets": [],      # [{"x": x, "y": y, "angle": angle}, ...]
@@ -96,6 +101,8 @@ vision_fov_angle = 90
 vision_width = 220
 
 skill_window_open = False
+weapon_state = WeaponState()
+vision_shape_override = None
 
 def draw_ui_gauge(surface, x, y, current_val, max_val):
     """투명 중앙이 뚫린 HP 프레임 안쪽에 HP 게이지를 그립니다."""
@@ -134,6 +141,16 @@ def draw_ui_gauge(surface, x, y, current_val, max_val):
     surface.blit(HpBarFrame, (x, y))
 
 
+def draw_ammo_status(surface):
+    """현재 무기와 탄창/예비 탄약을 화면 오른쪽 아래에 표시합니다."""
+    config = weapon_state.config
+    ammo_font = pygame.font.SysFont("malgungothic", 24)
+    name_text = ammo_font.render(config.name, True, (255, 220, 120))
+    ammo_text = ammo_font.render(weapon_state.ammo_text(), True, (255, 255, 255))
+    surface.blit(name_text, (ScreenX - 210, ScreenY - 72))
+    surface.blit(ammo_text, (ScreenX - 80, ScreenY - 72))
+
+
 
 def MainView():
     global running, ScreenState
@@ -167,12 +184,32 @@ def activate_quick_slot(key):
     system_message = message
 
 
+def select_weapon(weapon_id):
+    global system_message, vision_shape_override
+    if weapon_state.select(weapon_id):
+        vision_shape_override = None
+        system_message = f"무기 변경: {weapon_state.config.name}"
+
+
+def reload_weapon():
+    global system_message
+    loaded = weapon_state.reload()
+    system_message = "재장전 완료" if loaded else "재장전할 탄환이 없습니다."
+
+
 def handle_key_event(event, _mouse_pos):
     global skill_window_open, dragging_skill
     key_actions = {
         pygame.K_ESCAPE: lambda _key: handle_quit(None, None),
         pygame.K_k: lambda _key: toggle_skill_window(),
         pygame.K_v: lambda _key: cycle_vision_shape(),
+        pygame.K_r: lambda _key: reload_weapon(),
+        pygame.K_1: lambda _key: select_weapon("pistol"),
+        pygame.K_2: lambda _key: select_weapon("rifle"),
+        pygame.K_3: lambda _key: select_weapon("shotgun"),
+        pygame.K_4: lambda _key: select_weapon("sniper"),
+        pygame.K_5: lambda _key: select_weapon("smg"),
+        pygame.K_6: lambda _key: select_weapon("knife"),
     }
     key_actions.get(event.key, activate_quick_slot)(event.key)
 
@@ -184,28 +221,63 @@ def toggle_skill_window():
 
 
 def cycle_vision_shape():
-    global vision_shape_index, system_message
+    global vision_shape_index, vision_shape_override, system_message
     vision_shape_index = (vision_shape_index + 1) % len(vision_shapes)
-    shape_name = vision_shapes[vision_shape_index]
+    vision_shape_override = vision_shapes[vision_shape_index]
+    shape_name = vision_shape_override
     system_message = f"시야 모양: {shape_name}"
 
 
 def fire_bullet():
-    global bullets, screen_shake
-    new_bullet = Bullet(5, damage=10, owner_id=my_id)
+    global bullets, screen_shake, system_message
+    config = weapon_state.config
+    if not weapon_state.can_fire():
+        if config.projectile and weapon_state.magazine_ammo == 0:
+            reload_weapon()
+        elif not config.projectile:
+            system_message = f"{config.name} 공격은 아직 준비 중입니다. 데미지: {config.damage}"
+        return
+
     center_x, center_y = get_player_world_center(
         my_player.X,
         my_player.Y,
         IML.Player.get_width(),
         IML.Player.get_height(),
     )
-    target_x, target_y = screen_to_world(Weapon_Pos[0], Weapon_Pos[1], CameraPosX, CameraPosY, camera_zoom)
-    gun_angle = math.radians(Weapon_Angle)
-    muzzle_x = center_x + math.cos(gun_angle) * 40
-    muzzle_y = center_y + math.sin(gun_angle) * 40
-    new_bullet.launch(muzzle_x, muzzle_y, target_x, target_y)
-    new_bullet.just_fired = True
-    bullets.append(new_bullet)
+    current_mouse_pos = pygame.mouse.get_pos()
+    player_screen_center = get_player_screen_center(
+        my_player.X,
+        my_player.Y,
+        IML.Player.get_width(),
+        IML.Player.get_height(),
+        CameraPosX,
+        CameraPosY,
+        camera_zoom,
+    )
+    base_angle = math.radians(
+        Tool.GetAtn2Angle_Degrees(player_screen_center, current_mouse_pos)
+    )
+    muzzle_x = center_x + math.cos(base_angle) * 40
+    muzzle_y = center_y + math.sin(base_angle) * 40
+    weapon_state.consume_round()
+
+    for _ in range(config.pellets):
+        shot_angle = base_angle + math.radians(random.uniform(-config.spread_degrees, config.spread_degrees))
+        new_bullet = Bullet(
+            config.bullet_size,
+            damage=config.damage,
+            owner_id=my_id,
+            weapon_id=weapon_state.weapon_id,
+        )
+        new_bullet.launch(
+            muzzle_x,
+            muzzle_y,
+            muzzle_x + math.cos(shot_angle) * 1000,
+            muzzle_y + math.sin(shot_angle) * 1000,
+            speed=config.bullet_speed,
+        )
+        new_bullet.just_fired = True
+        bullets.append(new_bullet)
     screen_shake = 15
 
 
@@ -266,21 +338,24 @@ def GameView():
     
     my_player.handle_input()
 
-    # 달리기(LSHIFT) 중에는 잠깐 시야를 넓히되 최대값을 넘지 않습니다.
-    target_fov = SPRINT_CAMERA_FOV if my_player.is_dashing else CAMERA_FOV
-    target_fov = min(target_fov, CAMERA_FOV_MAX)
-    camera_fov += (target_fov - camera_fov) * CAMERA_FOV_SMOOTH
-    camera_zoom = 1.0 / camera_fov
     
     # ★ [정리] 서버 데이터 동기화 - 필요한 움직임 데이터만 전송
     send_data["posX"] = my_player.X
     send_data["posY"] = my_player.Y
     send_data["hp"] = my_player.Hp
     send_data["angle"] = Weapon_Angle
+    send_data["weapon_id"] = weapon_state.weapon_id
+    send_data["magazine_ammo"] = weapon_state.magazine_ammo
+    send_data["reserve_ammo"] = weapon_state.reserve_ammo
     
     # ★ [정리] 총알 정보 - 이번 프레임에서 새로 발사된 총알만 전송
     send_data["bullets"] = [
-        {"x": bullet.x, "y": bullet.y, "angle": Weapon_Angle}
+        {
+            "x": bullet.x,
+            "y": bullet.y,
+            "angle": bullet.angle,
+            "weapon_id": bullet.weapon_id,
+        }
         for bullet in bullets
         if hasattr(bullet, 'just_fired') and bullet.just_fired
     ]
@@ -294,6 +369,17 @@ def GameView():
         server_raw = client.recv(4096)
         if server_raw:
             server_players = pickle.loads(server_raw)
+            own_snapshot = server_players.get(my_id)
+            if own_snapshot:
+                weapon_id = own_snapshot.get("weapon_id", weapon_state.weapon_id)
+                if weapon_id in WEAPONS:
+                    weapon_state.weapon_id = weapon_id
+                weapon_state.magazine_ammo = own_snapshot.get(
+                    "magazine_ammo", weapon_state.magazine_ammo
+                )
+                weapon_state.reserve_ammo = own_snapshot.get(
+                    "reserve_ammo", weapon_state.reserve_ammo
+                )
             # ★ [정리] 서버에서 받은 플레이어 데이터 구조:
             # server_players[id] = {
             #     "posX": x,          # 상대 플레이어 위치
@@ -316,6 +402,10 @@ def GameView():
         CameraPosY += random.randint(-screen_shake, screen_shake)
         screen_shake -= 1
 
+    CameraPosX, CameraPosY = TileGene.clamp_camera(
+        CameraPosX, CameraPosY, ScreenX, ScreenY, camera_zoom
+    )
+
     player_screen_x, player_screen_y = world_to_screen(my_player.X, my_player.Y, CameraPosX, CameraPosY, camera_zoom)
     player_center_screen_x, player_center_screen_y = get_player_screen_center(my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(), CameraPosX, CameraPosY, camera_zoom)
 
@@ -327,7 +417,8 @@ def GameView():
     Shotgun_rect = rotated_shotgun.get_rect()
     Shotgun_rect.center = (player_center_screen_x, player_center_screen_y)
 
-    current_vision_shape = vision_shapes[vision_shape_index]
+    current_vision = weapon_state.config
+    current_vision_shape = vision_shape_override or current_vision.vision_shape
     visibility_cache = {}
 
     def is_visible(point_x, point_y):
@@ -338,17 +429,17 @@ def GameView():
                 player_world_y,
                 point_x,
                 point_y,
-                vision_radius,
+                current_vision.vision_radius,
                 vision_shape=current_vision_shape,
                 direction_angle=Weapon_Angle,
-                fov_angle=vision_fov_angle,
-                vision_width=vision_width,
+                fov_angle=current_vision.vision_fov,
+                vision_width=current_vision.vision_width,
             )
         return visibility_cache[point]
 
     # ------------------ [게임 월드 그리기] ------------------
     display.fill((0, 0, 200))
-    TileGene.draw(display, CameraPosX, CameraPosY)
+    TileGene.draw(display, CameraPosX, CameraPosY, camera_zoom)
 
     player_world_x, player_world_y = get_player_world_center(my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height())
 
@@ -378,12 +469,20 @@ def GameView():
             processed_bullet_events.add(event_id)
             if bullet_info.get("owner_id") == my_id:
                 continue
-            enemy_bullet = Bullet(30, damage=10, owner_id=bullet_info.get("owner_id"))
+            weapon_id = bullet_info.get("weapon_id", "pistol")
+            config = WEAPONS.get(weapon_id, WEAPONS["pistol"])
+            enemy_bullet = Bullet(
+                config.bullet_size,
+                damage=config.damage,
+                owner_id=bullet_info.get("owner_id"),
+                weapon_id=weapon_id,
+            )
             angle = math.radians(bullet_info.get("angle", 0.0))
             enemy_bullet.launch(
                 bullet_info["x"], bullet_info["y"],
                 bullet_info["x"] + math.cos(angle) * 1000,
                 bullet_info["y"] + math.sin(angle) * 1000,
+                speed=config.bullet_speed,
             )
             remote_bullets.append(enemy_bullet)
 
@@ -429,6 +528,16 @@ def GameView():
     dark_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
     dark_overlay.fill((0, 0, 0, 0))
 
+    # 맵 바깥은 월드 타일이 없으므로 항상 검게 처리합니다.
+    map_screen_left = -CameraPosX * camera_zoom
+    map_screen_top = -CameraPosY * camera_zoom
+    map_screen_right = (TileGene.map_width * TileGene.tile_size - CameraPosX) * camera_zoom
+    map_screen_bottom = (TileGene.map_height * TileGene.tile_size - CameraPosY) * camera_zoom
+    pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (0, 0, ScreenX, max(0, map_screen_top)))
+    pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (0, min(ScreenY, map_screen_bottom), ScreenX, max(0, ScreenY - map_screen_bottom)))
+    pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (0, 0, max(0, map_screen_left), ScreenY))
+    pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (min(ScreenX, map_screen_right), 0, max(0, ScreenX - map_screen_right), ScreenY))
+
     start_tile_x = max(0, int(CameraPosX // TileGene.tile_size))
     end_tile_x = min(TileGene.map_width, int((CameraPosX + ScreenX / camera_zoom) // TileGene.tile_size) + 1)
     start_tile_y = max(0, int(CameraPosY // TileGene.tile_size))
@@ -473,7 +582,8 @@ def GameView():
     id_text = GuiFont.render(f"ID: {my_id}", True, (255, 255, 255))
     display.blit(id_text, (20, 20))
     
-    # --- [스킬 창 그리기 및 툴팁] ---
+    # --- [퀵슬롯 배경과 스킬 소스창] ---
+    draw_skill_panel(display)
     hovered_skill = draw_skill_window(display, MousePos, skill_window_open, dragging_skill)
     
     # 스킬 도감 (스킬창 닫혀있을 때는 안 보임 - draw_skill_window에서 처리)
@@ -484,6 +594,8 @@ def GameView():
     for slot in quick_slots:
         slot.update(MousePos)  # 호버 상태 업데이트
         slot.draw(display)
+
+    draw_ammo_status(display)
     
     # ★ [추가] 스킬 툴팁 그리기 (마우스 raycast 무시 - 드래그 중이 아닐 때만)
     if skill_window_open and hovered_skill and dragging_skill is None:

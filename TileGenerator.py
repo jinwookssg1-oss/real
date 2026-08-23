@@ -173,10 +173,30 @@ class TileGenerator:
                 (tile_x * self.tile_size, tile_y * self.tile_size),
             )
 
-    def draw(self, surface, camera_x, camera_y):
+    def draw(self, surface, camera_x, camera_y, zoom=1.0):
         """미리 합성한 월드 Surface를 카메라 위치에 맞춰 그립니다."""
         if self.world_surface is not None:
-            surface.blit(self.world_surface, (-int(camera_x), -int(camera_y)))
+            if zoom == 1.0:
+                surface.blit(self.world_surface, (-int(camera_x), -int(camera_y)))
+            else:
+                scaled_world = pygame.transform.smoothscale(
+                    self.world_surface,
+                    (round(self.world_surface.get_width() * zoom), round(self.world_surface.get_height() * zoom)),
+                )
+                surface.blit(scaled_world, (-round(camera_x * zoom), -round(camera_y * zoom)))
+
+    def clamp_camera(self, camera_x, camera_y, screen_width, screen_height, zoom=1.0):
+        """카메라가 맵 바깥을 향하지 않도록 월드 좌표에서 제한합니다."""
+        view_width = screen_width / zoom
+        view_height = screen_height / zoom
+        world_width = self.map_width * self.tile_size
+        world_height = self.map_height * self.tile_size
+        max_camera_x = max(0, world_width - view_width)
+        max_camera_y = max(0, world_height - view_height)
+        return (
+            max(0, min(camera_x, max_camera_x)),
+            max(0, min(camera_y, max_camera_y)),
+        )
 
     def get_tile_at(self, tile_x, tile_y):
         return self.map_data.get((tile_x, tile_y))

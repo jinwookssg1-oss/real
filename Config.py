@@ -19,7 +19,7 @@ CAMERA_FOV_SMOOTH = 0.12
 
 
 #총알 관련
-Bullet_Size = 8
+Bullet_Size = 20
 
 
 

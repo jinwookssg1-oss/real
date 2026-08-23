@@ -44,7 +44,16 @@ def handle_client(conn, player_id):
     conn.send(pickle.dumps({"init_id": player_id, "seed": 12345}))  # 초기 데이터 전송 (아이디, 시드 등)
 
     # 플레이어 초기값 세팅
-    players[player_id] = {"posX": 0, "posY": 0, "angle": 0.0, "hp": 100, "bullets": []}
+    players[player_id] = {
+        "posX": 0,
+        "posY": 0,
+        "angle": 0.0,
+        "hp": 100,
+        "weapon_id": "pistol",
+        "magazine_ammo": 12,
+        "reserve_ammo": 36,
+        "bullets": [],
+    }
 
     try:
         while True:
@@ -60,6 +69,13 @@ def handle_client(conn, player_id):
             players[player_id]["posY"] = client_data["posY"]
             players[player_id]["angle"] = client_data["angle"]
             players[player_id]["hp"] = max(0, client_data.get("hp", 100))
+            players[player_id]["weapon_id"] = client_data.get("weapon_id", "pistol")
+            players[player_id]["magazine_ammo"] = max(
+                0, client_data.get("magazine_ammo", players[player_id]["magazine_ammo"])
+            )
+            players[player_id]["reserve_ammo"] = max(
+                0, client_data.get("reserve_ammo", players[player_id]["reserve_ammo"])
+            )
 
             with player_lock:
                 for bullet in client_data.get("bullets", []):

@@ -28,6 +28,7 @@ class Imageload():
         ).convert_alpha()
 
         self.SkillWindow = pygame.image.load(os.path.join(current_dir,"Image","SkillWindow.png")).convert_alpha()
+        self.QuickSlot = pygame.image.load(os.path.join(current_dir, "Image", "QuickSlot.png")).convert_alpha()
 
     # 2. 이미 크기가 줄어든 상태이므로 원본을 바로 리턴하면 됩니다.
     def GetShotGun(self, index=0):
