@@ -146,7 +146,10 @@ def draw_ammo_status(surface):
     config = weapon_state.config
     ammo_font = pygame.font.SysFont("malgungothic", 24)
     name_text = ammo_font.render(config.name, True, (255, 220, 120))
-    ammo_text = ammo_font.render(weapon_state.ammo_text(), True, (255, 255, 255))
+    if weapon_state.is_reloading_now():
+        ammo_text = ammo_font.render("재장전 중...", True, (255, 180, 120))
+    else:
+        ammo_text = ammo_font.render(weapon_state.ammo_text(), True, (255, 255, 255))
     surface.blit(name_text, (ScreenX - 210, ScreenY - 72))
     surface.blit(ammo_text, (ScreenX - 80, ScreenY - 72))
 
@@ -193,8 +196,20 @@ def select_weapon(weapon_id):
 
 def reload_weapon():
     global system_message
-    loaded = weapon_state.reload()
-    system_message = "재장전 완료" if loaded else "재장전할 탄환이 없습니다."
+    if weapon_state.is_reloading_now():
+        system_message = "이미 재장전 중입니다."
+        return
+    if weapon_state.config.projectile and weapon_state.magazine_ammo >= weapon_state.config.magazine_size:
+        system_message = "탄창이 이미 가득 찼습니다."
+        return
+    if weapon_state.config.projectile and weapon_state.reserve_ammo <= 0:
+        system_message = "예비 탄약이 없습니다."
+        return
+
+    if weapon_state.start_reload():
+        system_message = f"{weapon_state.config.name} 재장전 중..."
+    else:
+        system_message = "재장전할 탄환이 없습니다."
 
 
 def handle_key_event(event, _mouse_pos):
@@ -231,6 +246,10 @@ def cycle_vision_shape():
 def fire_bullet():
     global bullets, screen_shake, system_message
     config = weapon_state.config
+
+    if weapon_state.is_reloading_now():
+        system_message = "재장전 중입니다."
+        return
     if not weapon_state.can_fire():
         if config.projectile and weapon_state.magazine_ammo == 0:
             reload_weapon()
@@ -260,6 +279,7 @@ def fire_bullet():
     muzzle_x = center_x + math.cos(base_angle) * 40
     muzzle_y = center_y + math.sin(base_angle) * 40
     weapon_state.consume_round()
+    screen_shake = min(12, screen_shake + int(config.recoil * 2))
 
     for _ in range(config.pellets):
         shot_angle = base_angle + math.radians(random.uniform(-config.spread_degrees, config.spread_degrees))
@@ -277,8 +297,11 @@ def fire_bullet():
             speed=config.bullet_speed,
         )
         new_bullet.just_fired = True
+        new_bullet.life_time = config.bullet_lifetime
         bullets.append(new_bullet)
-    screen_shake = 15
+
+    if config.projectile and weapon_state.magazine_ammo == 0:
+        reload_weapon()
 
 
 def handle_mouse_down(event, mouse_pos):
@@ -337,8 +360,8 @@ def GameView():
     Weapon_Pos = pygame.mouse.get_pos()
     
     my_player.handle_input()
+    weapon_state.update_reload()
 
-    
     # ★ [정리] 서버 데이터 동기화 - 필요한 움직임 데이터만 전송
     send_data["posX"] = my_player.X
     send_data["posY"] = my_player.Y
@@ -567,8 +590,14 @@ def GameView():
                 )
 
     display.blit(dark_overlay, (0, 0))
-    
-    
+
+    # 시야 밖에 있어도 총알은 항상 보이도록 최종 레이어에서 다시 그립니다.
+    for bullet in bullets:
+        bullet.draw(display, CameraPosX, CameraPosY, camera_zoom, force_visible=True)
+
+    for bullet in remote_bullets:
+        bullet.draw(display, CameraPosX, CameraPosY, camera_zoom, force_visible=True)
+
     # =================================================================
     # 📊 고정 UI 그리기 영역 (시야 레이어보다 위에 그려야 선명하게 보입니다)
     # =================================================================
