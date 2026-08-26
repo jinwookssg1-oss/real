@@ -6,6 +6,7 @@ from TileGenerator import *
 from Bullet import *
 import Tool
 import random
+import os
 import socket
 import pickle
 from PlayerClass import Player
@@ -90,8 +91,43 @@ running = True
 bullets = []
 remote_bullets = []
 processed_bullet_events = set()
+skill_cooldowns = {}
+vision_skill_until = 0
+shield_until = 0
+haste_until = 0
+active_bombs = []
+active_explosions = []
+pending_treasure_destroys = []
 screen_shake = 0
 server_players = {}
+
+def load_effect_sound(filename):
+    """효과음 파일이 아직 없어도 게임이 실행되도록 선택적으로 로드합니다."""
+    sound_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Sound", filename)
+    try:
+        return pygame.mixer.Sound(sound_path)
+    except (pygame.error, OSError) as error:
+        print(f"[사운드 로드 실패] {filename}: {error}")
+        return None
+
+
+def play_effect_sound(sound, filename):
+    if sound is None:
+        return
+    try:
+        sound.play()
+    except pygame.error as error:
+        print(f"[사운드 재생 실패] {filename}: {error}")
+
+
+skill_sounds = {
+    "달팽이 세개": load_effect_sound("skill_bomb.wav"),
+    "레이징 블로우": load_effect_sound("skill_attack.wav"),
+    "헤이스트": load_effect_sound("skill_haste.wav"),
+    "매의 눈": load_effect_sound("skill_vision.wav"),
+    "보호막": load_effect_sound("skill_shield.wav"),
+}
+chest_sound = load_effect_sound("chest_open.wav")
 
 # [커스텀 가능] 시야 모양, 거리, 부채꼴 각도, 직사각형/선 폭을 조정합니다.
 vision_radius = 450
@@ -125,10 +161,10 @@ def draw_ui_gauge(surface, x, y, current_val, max_val):
     # 2. 체력 비율에 따른 게이지 색상 결정 (인자 fill_color 대신 실시간 계산)
     if current_val >= 100:
         hp_color = pygame.Color("green")
+    elif current_val <= 60:
+        hp_color = pygame.Color("red")      # 체력이 60 이하로 떨어지면 노란색
     elif current_val <= 80:
-        hp_color = pygame.Color("yellow")      # 체력이 80 이하로 떨어지면 빨간색
-    else:
-        hp_color = pygame.Color("red")   # 체력이 81~99 사이면 노란색
+        hp_color = pygame.Color("yellow")   # 체력이 81~99 사이면 노란색
         
     # 3. 현재 체력만큼 게이지 채워 그리기
     fill_rect = inner_rect.copy()
@@ -170,21 +206,77 @@ def MainView():
                 ScreenState = "GameView"
 
 
+def GameOverView():
+    global running
+    title = pygame.font.SysFont("malgungothic", 96).render("게임 오버", True, (220, 50, 50))
+    guide = pygame.font.SysFont("malgungothic", 32).render("ESC를 눌러 종료하세요", True, (255, 255, 255))
+    display.blit(title, title.get_rect(center=(ScreenX // 2, ScreenY // 2 - 60)))
+    display.blit(guide, guide.get_rect(center=(ScreenX // 2, ScreenY // 2 + 70)))
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            running = False
+
+
 def handle_quit(_event, _mouse_pos):
     global running
     running = False
 
 
 def activate_quick_slot(key):
-    global system_message
+    global system_message, vision_shape_override, vision_skill_until, shield_until, haste_until
     key_name = pygame.key.name(key).upper()
     slot = next((slot for slot in quick_slots if slot.key_name == key_name), None)
-    message = (
-        SKILL_BOOK[slot.assigned_skill].Atk()
-        if slot and slot.assigned_skill
-        else f"💨 [{key_name}] 슬롯이 비어있습니다."
-    )
-    system_message = message
+    if not slot or not slot.assigned_skill:
+        system_message = f"[{key_name}] 슬롯이 비어있습니다."
+        return
+
+    skill_name = slot.assigned_skill
+    now = pygame.time.get_ticks()
+    if now < skill_cooldowns.get(skill_name, 0):
+        remain = (skill_cooldowns[skill_name] - now) / 1000
+        system_message = f"{skill_name} 재사용 대기: {remain:.1f}초"
+        return
+
+    skill_cooldowns[skill_name] = now + 5000
+    play_effect_sound(skill_sounds.get(skill_name), skill_name)
+    if skill_name == "달팽이 세개":
+        target_x, target_y = screen_to_world(*pygame.mouse.get_pos(), CameraPosX, CameraPosY, camera_zoom)
+        active_bombs.append({"x": target_x, "y": target_y, "explode_at": now + 600})
+        system_message = "폭탄을 설치했습니다."
+    elif skill_name == "레이징 블로우":
+        base_angle = math.atan2(
+            pygame.mouse.get_pos()[1] - get_player_screen_center(
+                my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(),
+                CameraPosX, CameraPosY, camera_zoom
+            )[1],
+            pygame.mouse.get_pos()[0] - get_player_screen_center(
+                my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(),
+                CameraPosX, CameraPosY, camera_zoom
+            )[0],
+        )
+        center_x, center_y = get_player_world_center(
+            my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height()
+        )
+        for spread in (-12, 0, 12):
+            angle = base_angle + math.radians(spread)
+            skill_bullet = Bullet(8, damage=SKILL_BOOK[skill_name].Power, owner_id=my_id)
+            skill_bullet.launch(center_x, center_y, center_x + math.cos(angle) * 1000,
+                                center_y + math.sin(angle) * 1000, speed=22)
+            bullets.append(skill_bullet)
+        system_message = "레이징 블로우를 사용했습니다."
+    elif skill_name == "헤이스트":
+        haste_until = now + 5000
+        system_message = "5초 동안 달리기 속도가 증가합니다."
+    elif skill_name == "매의 눈":
+        vision_shape_override = VISION_CIRCLE
+        vision_skill_until = now + 3000
+        system_message = "3초 동안 원형으로 넓게 봅니다."
+    elif skill_name == "보호막":
+        shield_until = now + 5000
+        system_message = "5초 동안 피해를 받지 않습니다."
 
 
 def select_weapon(weapon_id):
@@ -212,13 +304,24 @@ def reload_weapon():
         system_message = "재장전할 탄환이 없습니다."
 
 
+def activate_skill_or_reload(key):
+    key_name = pygame.key.name(key).upper()
+    slot = next((slot for slot in quick_slots if slot.key_name == key_name), None)
+    if slot and slot.assigned_skill:
+        activate_quick_slot(key)
+    else:
+        reload_weapon()
+
+
 def handle_key_event(event, _mouse_pos):
     global skill_window_open, dragging_skill
     key_actions = {
         pygame.K_ESCAPE: lambda _key: handle_quit(None, None),
         pygame.K_k: lambda _key: toggle_skill_window(),
         pygame.K_v: lambda _key: cycle_vision_shape(),
-        pygame.K_r: lambda _key: reload_weapon(),
+        pygame.K_q: lambda _key: activate_quick_slot(_key),
+        pygame.K_e: lambda _key: activate_quick_slot(_key),
+        pygame.K_r: lambda _key: activate_skill_or_reload(_key),
         pygame.K_1: lambda _key: select_weapon("pistol"),
         pygame.K_2: lambda _key: select_weapon("rifle"),
         pygame.K_3: lambda _key: select_weapon("shotgun"),
@@ -352,15 +455,39 @@ def handle_game_events():
 
 
 def GameView():
-    global running, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos, camera_fov, camera_zoom
-    global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos
+    global running, ScreenState, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos, camera_fov, camera_zoom
+    global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos, system_message
+    global vision_shape_override, vision_skill_until, shield_until, haste_until
+    global active_bombs, active_explosions, pending_treasure_destroys
 
     MousePos = pygame.mouse.get_pos()
+    if my_player.Hp <= 0:
+        ScreenState = "GameOver"
+        return
     handle_game_events()
     Weapon_Pos = pygame.mouse.get_pos()
     
     my_player.handle_input()
     weapon_state.update_reload()
+
+    now = pygame.time.get_ticks()
+    if vision_skill_until and now >= vision_skill_until:
+        vision_skill_until = 0
+        vision_shape_override = None
+    my_player.normal_speed = 10 if now < haste_until else 5
+
+    pending_bombs = []
+    for bomb in active_bombs:
+        if now < bomb["explode_at"]:
+            pending_bombs.append(bomb)
+            continue
+        active_explosions.append({"x": bomb["x"], "y": bomb["y"], "until": now + 350})
+        for p_id, p_info in server_players.items():
+            distance = math.hypot(p_info["posX"] - bomb["x"], p_info["posY"] - bomb["y"])
+            if distance <= 120:
+                p_info["hp"] = max(0, p_info.get("hp", 100) - 30)
+    active_bombs = pending_bombs
+    active_explosions = [explosion for explosion in active_explosions if now < explosion["until"]]
 
     # ★ [정리] 서버 데이터 동기화 - 필요한 움직임 데이터만 전송
     send_data["posX"] = my_player.X
@@ -370,6 +497,7 @@ def GameView():
     send_data["weapon_id"] = weapon_state.weapon_id
     send_data["magazine_ammo"] = weapon_state.magazine_ammo
     send_data["reserve_ammo"] = weapon_state.reserve_ammo
+    send_data["destroyed_treasures"] = list(pending_treasure_destroys)
     
     # ★ [정리] 총알 정보 - 이번 프레임에서 새로 발사된 총알만 전송
     send_data["bullets"] = [
@@ -392,6 +520,14 @@ def GameView():
         server_raw = client.recv(4096)
         if server_raw:
             server_players = pickle.loads(server_raw)
+            synchronized_treasures = set()
+            for player_snapshot in server_players.values():
+                synchronized_treasures.update(
+                    tuple(treasure) for treasure in player_snapshot.get("destroyed_treasures", [])
+                )
+            for tile_x, tile_y in synchronized_treasures:
+                TileGene.destroy_treasure(tile_x, tile_y)
+            pending_treasure_destroys.clear()
             own_snapshot = server_players.get(my_id)
             if own_snapshot:
                 weapon_id = own_snapshot.get("weapon_id", weapon_state.weapon_id)
@@ -471,6 +607,21 @@ def GameView():
         bullet.draw(display, CameraPosX, CameraPosY, camera_zoom)
 
         if bullet.is_active:
+            if TileGene.check_wall_collision(bullet.rect):
+                bullet.is_active = False
+                continue
+            destroyed_treasure = TileGene.destroy_treasure_at(bullet.rect)
+            if destroyed_treasure:
+                pending_treasure_destroys.append(destroyed_treasure)
+                play_effect_sound(chest_sound, "chest_open.wav")
+                empty_slot = next((slot for slot in quick_slots if slot.assigned_skill is None), None)
+                if empty_slot:
+                    empty_slot.assigned_skill = random.choice(list(SKILL_BOOK))
+                    system_message = f"보물상자에서 [{empty_slot.assigned_skill}] 획득!"
+                else:
+                    system_message = "보물상자를 열었지만 스킬 슬롯이 가득 찼습니다."
+                bullet.is_active = False
+                continue
             for p_id, p_info in server_players.items():
                 if int(p_id) == my_id:
                     continue
@@ -511,10 +662,16 @@ def GameView():
 
     for bullet in remote_bullets:
         bullet.update()
-        if bullet.is_active and my_player.check_bullet_hit(bullet.rect, bullet.damage):
+        if bullet.is_active and TileGene.check_wall_collision(bullet.rect):
+            bullet.is_active = False
+        if bullet.is_active and shield_until <= pygame.time.get_ticks() and my_player.check_bullet_hit(bullet.rect, bullet.damage):
             bullet.is_active = False
         bullet.draw(display, CameraPosX, CameraPosY, camera_zoom)
     remote_bullets = [b for b in remote_bullets if b.is_active]
+
+    if my_player.Hp <= 0:
+        ScreenState = "GameOver"
+        return
 
     # 다른 플레이어 그리기
     for p_id, p_info in server_players.items():
@@ -598,6 +755,32 @@ def GameView():
     for bullet in remote_bullets:
         bullet.draw(display, CameraPosX, CameraPosY, camera_zoom, force_visible=True)
 
+    # 폭탄과 폭발 범위는 시야 효과 위에 표시합니다.
+    for bomb in active_bombs:
+        bomb_screen = world_to_screen(bomb["x"], bomb["y"], CameraPosX, CameraPosY, camera_zoom)
+        pygame.draw.circle(display, (255, 170, 40), (round(bomb_screen[0]), round(bomb_screen[1])),
+                           max(5, round(12 * camera_zoom)), 3)
+    for explosion in active_explosions:
+        explosion_screen = world_to_screen(
+            explosion["x"], explosion["y"], CameraPosX, CameraPosY, camera_zoom
+        )
+        pygame.draw.circle(
+            display,
+            (255, 80, 20),
+            (round(explosion_screen[0]), round(explosion_screen[1])),
+            max(10, round(120 * camera_zoom)),
+            5,
+        )
+
+    if shield_until > pygame.time.get_ticks():
+        shield_center = get_player_screen_center(
+            my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(),
+            CameraPosX, CameraPosY, camera_zoom
+        )
+        pygame.draw.circle(display, (100, 220, 255),
+                           (round(shield_center[0]), round(shield_center[1])),
+                           max(20, round(45 * camera_zoom)), 4)
+
     # =================================================================
     # 📊 고정 UI 그리기 영역 (시야 레이어보다 위에 그려야 선명하게 보입니다)
     # =================================================================
@@ -653,6 +836,8 @@ while running:
         MainView()
     elif ScreenState == "GameView":
         GameView()
+    elif ScreenState == "GameOver":
+        GameOverView()
     pygame.display.update() 
     clock.tick(fps)
 

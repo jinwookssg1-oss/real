@@ -49,6 +49,8 @@ SKILL_BOOK = {
     "달팽이 세개": Skill("달팽이 세개", RED, "달팽이 껍질을 던졌습니다!", 15, "3개의 껍질을 던져 광범위 공격"),
     "레이징 블로우": Skill("레이징 블로우", BLUE, "전방의 적을 연속 베기합니다!", 25, "근거리 연속 공격, 최대 5회"),
     "헤이스트": Skill("헤이스트", YELLOW, "이동속도와 점프력이 상승합니다!", 0, "5초간 이동속도 2배 증가"),
+    "매의 눈": Skill("매의 눈", (120, 220, 255), "시야가 넓어집니다!", 0, "3초간 원형 시야"),
+    "보호막": Skill("보호막", (100, 255, 180), "보호막이 생겼습니다!", 0, "5초간 피해 무효화"),
 }
 
 
@@ -111,14 +113,16 @@ class QuickSlot:
 
 
 skill_window = [
-    SkillWindowItem(1200, 150, "달팽이 세개"),
-    SkillWindowItem(1400, 150, "레이징 블로우"),
-    SkillWindowItem(1600, 150, "헤이스트"),
+    SkillWindowItem(1220, 150, "달팽이 세개"),
+    SkillWindowItem(1450, 150, "레이징 블로우"),
+    SkillWindowItem(1680, 150, "헤이스트"),
+    SkillWindowItem(1220, 240, "매의 눈"),
+    SkillWindowItem(1450, 240, "보호막"),
 ]
 quick_slots = [
-    QuickSlot(1280, 920, "Q"),
-    QuickSlot(1380, 920, "W"),
-    QuickSlot(1480, 920, "E"),
+    QuickSlot(1260, 920, "Q"),
+    QuickSlot(1380, 920, "E"),
+    QuickSlot(1500, 920, "R"),
 ]
 
 dragging_skill = None

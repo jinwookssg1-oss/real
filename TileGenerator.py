@@ -8,7 +8,7 @@ VISION_CONE = "cone"
 VISION_RECTANGLE = "rectangle"
 VISION_LINE = "line"
 # [커스텀 가능] 타일 한 칸의 픽셀 크기입니다. 맵 해상도와 렌더링 비용에 영향을 줍니다.
-DEFAULT_TILE_SIZE = 32
+DEFAULT_TILE_SIZE = 1
 
 class Tile:
     def __init__(self, tile_type, is_walkable):
@@ -68,11 +68,13 @@ class TileGenerator:
         # -------------------------------------
         door = pygame.Surface((self.tile_size, self.tile_size))
         door.fill((140, 180, 130))  # 바닥색
-        margin = max(3, self.tile_size // 6)
-        inner_width = self.tile_size - margin * 2
-        pygame.draw.rect(door, (101, 67, 33), (margin, margin, inner_width, inner_width))
-        pygame.draw.rect(door, (255, 200, 100), (margin, margin, inner_width, inner_width), 1)
-        pygame.draw.circle(door, (200, 150, 50), (self.tile_size - margin - 2, self.tile_size // 2), 2)
+        door_width = max(8, round(self.tile_size * 0.95))
+        door_height = self.tile_size
+        door_x = (self.tile_size - door_width) // 2
+        door_y = max(0, (self.tile_size - door_height) // 2)
+        pygame.draw.rect(door, (101, 67, 33), (door_x, door_y, door_width, door_height))
+        pygame.draw.rect(door, (255, 200, 100), (door_x, door_y, door_width, door_height), 2)
+        pygame.draw.circle(door, (200, 150, 50), (door_x + door_width - 5, self.tile_size // 2), 3)
         self.tile_images[2] = door
         
         # -------------------------------------
@@ -140,15 +142,18 @@ class TileGenerator:
                         self.map_data[(hx, hy)] = Tile(tile_type=0, is_walkable=True)
             
             # ★ [추가] 집에 문 배치 (테두리 중 랜덤한 위치, 4개 방향 중 선택)
+            door_x = random.randint(house_x + 1, house_x + house_w - 4)
+            door_y = random.randint(house_y + 1, house_y + house_h - 4)
             door_sides = [
-                # (x, y) - 위, 아래, 좌, 우
-                (random.randint(house_x + 1, house_x + house_w - 2), house_y),  # 위쪽
-                (random.randint(house_x + 1, house_x + house_w - 2), house_y + house_h - 1),  # 아래쪽
-                (house_x, random.randint(house_y + 1, house_y + house_h - 2)),  # 좌측
-                (house_x + house_w - 1, random.randint(house_y + 1, house_y + house_h - 2))  # 우측
+                # 각 방향으로 세 칸을 열어 넓은 출입구를 만듭니다.
+                ((door_x, house_y), (door_x + 1, house_y), (door_x + 2, house_y)),  # 위쪽
+                ((door_x, house_y + house_h - 1), (door_x + 1, house_y + house_h - 1), (door_x + 2, house_y + house_h - 1)),  # 아래쪽
+                ((house_x, door_y), (house_x, door_y + 1), (house_x, door_y + 2)),  # 좌측
+                ((house_x + house_w - 1, door_y), (house_x + house_w - 1, door_y + 1), (house_x + house_w - 1, door_y + 2)),  # 우측
             ]
-            door_pos = random.choice(door_sides)
-            self.map_data[door_pos] = Tile(tile_type=2, is_walkable=True)  # 문은 통과 가능
+            door_positions = random.choice(door_sides)
+            for door_pos in door_positions:
+                self.map_data[door_pos] = Tile(tile_type=2, is_walkable=True)  # 문은 통과 가능
             
             # ★ [추가] 집에 확률적으로 보물상자 배치 (40% 확률)
             if random.random() < 0.4 and house_w > 2 and house_h > 2:
@@ -378,3 +383,47 @@ class TileGenerator:
                 return True  # 충돌 감지
         
         return False  # 충돌 없음
+
+    def check_wall_collision(self, rect):
+        """Rect가 벽 타일에 닿았는지 확인합니다. 문과 바닥은 통과합니다."""
+        points_to_check = [
+            (rect.left, rect.top),
+            (rect.right, rect.top),
+            (rect.left, rect.bottom),
+            (rect.right, rect.bottom),
+            rect.center,
+        ]
+
+        for x, y in points_to_check:
+            tile_x = int(x // self.tile_size)
+            tile_y = int(y // self.tile_size)
+            tile = self.map_data.get((tile_x, tile_y))
+            if tile is None or tile.tile_type == 1:
+                return True
+        return False
+
+    def destroy_treasure_at(self, rect):
+        """총알이 맞은 보물상자를 제거하고 맵을 다시 합성합니다."""
+        start_x = max(0, int(rect.left // self.tile_size))
+        end_x = min(self.map_width - 1, int(rect.right // self.tile_size))
+        start_y = max(0, int(rect.top // self.tile_size))
+        end_y = min(self.map_height - 1, int(rect.bottom // self.tile_size))
+
+        for tile_y in range(start_y, end_y + 1):
+            for tile_x in range(start_x, end_x + 1):
+                tile = self.map_data.get((tile_x, tile_y))
+                if tile and tile.tile_type == 3:
+                    self.destroy_treasure(tile_x, tile_y)
+                    return tile_x, tile_y
+        return None
+
+    def destroy_treasure(self, tile_x, tile_y):
+        """지정한 좌표의 보물상자를 제거합니다."""
+        tile = self.map_data.get((tile_x, tile_y))
+        if not tile or tile.tile_type != 3:
+            return False
+
+        self.map_data[(tile_x, tile_y)] = Tile(tile_type=0, is_walkable=True)
+        self._build_world_surface()
+        self._visibility_cache.clear()
+        return True

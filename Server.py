@@ -16,6 +16,7 @@ players = {}
 player_lock = threading.Lock()
 bullet_events = []
 next_bullet_event_id = 1
+destroyed_treasures = set()
 player_count = 0
 next_player_id = 1
 
@@ -64,6 +65,10 @@ def handle_client(conn, player_id):
 
             client_data = pickle.loads(data)
 
+            for treasure in client_data.get("destroyed_treasures", []):
+                if len(treasure) == 2:
+                    destroyed_treasures.add((int(treasure[0]), int(treasure[1])))
+
             # 3. 서버에 저장된 해당 유저 데이터 갱신
             players[player_id]["posX"] = client_data["posX"]
             players[player_id]["posY"] = client_data["posY"]
@@ -96,6 +101,7 @@ def handle_client(conn, player_id):
                 last_sent_bullet_event_id = pending_bullets[-1]["event_id"]
             for player in snapshot.values():
                 player["bullets"] = list(pending_bullets)
+                player["destroyed_treasures"] = list(destroyed_treasures)
             conn.sendall(pickle.dumps(snapshot))
     except Exception as e:
         print(f"[네트워크 오류] 플레이어 {player_id}번: {e}")

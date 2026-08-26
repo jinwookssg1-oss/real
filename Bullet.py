@@ -1,16 +1,23 @@
 import pygame
 import math
+import os
 import time
 
 class Bullet:
     def __init__(self, size=1, damage=10, owner_id=None, weapon_id="pistol"):
-        # 🌟 1. 총알 전용 독립된 작은 도화지(Surface)를 생성합니다.
-        # SRCALPHA를 넣어야 총알 주변 배경이 투명해집니다.
-        self.surface = pygame.Surface((size, size), pygame.SRCALPHA)
-
-        # 🌟 2. 자기 자신(Surface)의 중심에 흰색 원을 그립니다.
-        self.bullet = pygame.draw.circle(self.surface, pygame.Color("Yellow"), (size // 2, size // 2), size)
-
+        image_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "Image",
+            "sprite_0017.png",
+        )
+        bullet_image = pygame.image.load(image_path).convert_alpha()
+        image_width = max(8, size * 4)
+        image_height = max(1, round(bullet_image.get_height() * image_width / bullet_image.get_width()))
+        self.surface = pygame.transform.smoothscale(
+            bullet_image,
+            (image_width, image_height),
+        )
+        
         # 좌표 및 속도 초기화
         self.x = 0
         self.y = 0
@@ -60,19 +67,22 @@ class Bullet:
             if time.monotonic() - self.spawn_time > self.life_time:
                 self.is_active = False
 
-            # 🌟 안전장치: 화면 밖으로 멀리 벗어나면 총알을 비활성화 (메모리 아끼기)
-            if self.x < -100 or self.x > 2000 or self.y < -100 or self.y > 2000:
-                self.is_active = False
-
     def draw(self, display, camera_x=0, camera_y=0, zoom=1.0, force_visible=False):
         # 활성화 상태일 때만 메인 화면(display)에 총알 그리기
         if self.is_active:
-            if zoom == 1.0:
-                display.blit(self.surface, (int(self.x - camera_x), int(self.y - camera_y)))
-            else:
-                size = max(1, round(self.surface.get_width() * zoom))
-                image = pygame.transform.scale(self.surface, (size, size))
-                display.blit(image, (round((self.x - camera_x) * zoom), round((self.y - camera_y) * zoom)))
+            image = pygame.transform.rotate(self.surface, self.angle + 35)
+            if zoom != 1.0:
+                image = pygame.transform.smoothscale(
+                    image,
+                    (
+                        max(1, round(image.get_width() * zoom)),
+                        max(1, round(image.get_height() * zoom)),
+                    ),
+                )
+
+            center_x = (self.x - camera_x + self.surface.get_width() / 2) * zoom
+            center_y = (self.y - camera_y + self.surface.get_height() / 2) * zoom
+            display.blit(image, image.get_rect(center=(round(center_x), round(center_y))))
             return
 
         # 총알은 시야 레이어에서 가려지지 않도록 최종 렌더 단계에서 강제로 다시 그린다.
