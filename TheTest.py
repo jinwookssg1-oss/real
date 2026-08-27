@@ -100,8 +100,23 @@ active_explosions = []
 pending_treasure_destroys = []
 screen_shake = 0
 server_players = {}
+# 시야 밖을 검게 덮을 때 재사용하는 투명 레이어입니다.
 vision_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
+# 방향과 모양이 크게 바뀔 때만 시야 폴리곤을 다시 계산합니다.
 visibility_polygon_cache = {}
+
+def draw_visibility_geometry(surface, geometry, camera_x, camera_y, zoom):
+    """시야 부분을 마스크에서 투명하게 뚫습니다."""
+    if geometry.is_empty:
+        return
+    polygons = geometry.geoms if geometry.geom_type == "MultiPolygon" else (geometry,)
+    for polygon in polygons:
+        points = [
+            ((world_x - camera_x) * zoom, (world_y - camera_y) * zoom)
+            for world_x, world_y in polygon.exterior.coords
+        ]
+        if len(points) >= 3:
+            pygame.draw.polygon(surface, (0, 0, 0, 0), points)
 
 def load_effect_sound(filename):
     """효과음 파일이 아직 없어도 게임이 실행되도록 선택적으로 로드합니다."""
@@ -131,12 +146,9 @@ skill_sounds = {
 }
 chest_sound = load_effect_sound("chest_open.wav")
 
-# [커스텀 가능] 시야 모양, 거리, 부채꼴 각도, 직사각형/선 폭을 조정합니다.
-vision_radius = 450
+# 무기 설정을 기본값으로 사용하고, 스킬이 잠시 시야 모양만 덮어씁니다.
 vision_shapes = (VISION_CIRCLE, VISION_CONE, VISION_RECTANGLE, VISION_LINE)
 vision_shape_index = 0
-vision_fov_angle = 90
-vision_width = 220
 
 skill_window_open = False
 weapon_state = WeaponState()
@@ -342,11 +354,12 @@ def toggle_skill_window():
 
 
 def cycle_vision_shape():
+    """V 키로 현재 시야 모양을 순서대로 변경합니다."""
     global vision_shape_index, vision_shape_override, system_message
     vision_shape_index = (vision_shape_index + 1) % len(vision_shapes)
     vision_shape_override = vision_shapes[vision_shape_index]
     shape_name = vision_shape_override
-    system_message = f"시야 모양: {shape_name}"
+    system_message = f"시야 모양: {shape_name}" 
 
 
 def fire_bullet():
@@ -579,12 +592,14 @@ def GameView():
     rotated_shotgun = pygame.transform.rotate(shotgun_image, -Weapon_Angle)
     Shotgun_rect = rotated_shotgun.get_rect()
     Shotgun_rect.center = (player_center_screen_x, player_center_screen_y)
-
+    # 무기의 시야 설정과 일시적인 스킬 오버라이드를 합칩니다.
     current_vision = weapon_state.config
     current_vision_shape = vision_shape_override or current_vision.vision_shape
+    # 같은 프레임에서 같은 대상은 한 번만 벽 가림을 계산합니다.
     visibility_cache = {}
 
     def is_visible(point_x, point_y):
+        """다른 플레이어가 현재 시야 안에 있는지 확인합니다."""
         point = (point_x, point_y)
         if point not in visibility_cache:
             visibility_cache[point] = TileGene.is_point_visible_from(
@@ -708,9 +723,10 @@ def GameView():
 
 
     
-    # 시야 폴리곤 바깥 영역을 검게 덮어서, 보이지 않는 영역은 아예 안 보이게 처리
+    # 화면 전체를 어둡게 한 뒤, 아래에서 시야 폴리곤만 투명하게 뚫습니다.
     dark_overlay = vision_overlay
-    dark_overlay.fill((0, 0, 0, 255))
+    # 완전한 검정이 아니라 뒤의 맵이 살짝 보이는 반투명 검정입니다.
+    dark_overlay.fill((0, 0, 0, 170))
 
     # 맵 바깥은 월드 타일이 없으므로 항상 검게 처리합니다.
     map_screen_left = -CameraPosX * camera_zoom
@@ -722,6 +738,7 @@ def GameView():
     pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (0, 0, max(0, map_screen_left), ScreenY))
     pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (min(ScreenX, map_screen_right), 0, max(0, ScreenX - map_screen_right), ScreenY))
 
+    # 위치 8픽셀, 방향 4도 단위로 묶어 마우스 이동 중 재계산을 줄입니다.
     polygon_cache_key = (
         round(player_world_x / 8),
         round(player_world_y / 8),
@@ -732,6 +749,7 @@ def GameView():
         current_vision.vision_width,
     )
     if polygon_cache_key not in visibility_polygon_cache:
+        # 캐시가 없을 때만 벽과 광선이 포함된 폴리곤을 계산합니다.
         visibility_polygon_cache[polygon_cache_key] = TileGene.get_visibility_polygon(
             player_world_x,
             player_world_y,
@@ -746,11 +764,8 @@ def GameView():
             visibility_polygon_cache.pop(next(iter(visibility_polygon_cache)))
     visibility_polygon = visibility_polygon_cache[polygon_cache_key]
     if visibility_polygon:
-        polygon_screen_points = [
-            ((world_x - CameraPosX) * camera_zoom, (world_y - CameraPosY) * camera_zoom)
-            for world_x, world_y in visibility_polygon
-        ]
-        pygame.draw.polygon(dark_overlay, (0, 0, 0, 0), polygon_screen_points)
+        # 월드 폴리곤을 현재 카메라 좌표로 변환해 어두운 레이어를 뚫습니다.
+        draw_visibility_geometry(dark_overlay, visibility_polygon, CameraPosX, CameraPosY, camera_zoom)
 
     display.blit(dark_overlay, (0, 0))
 

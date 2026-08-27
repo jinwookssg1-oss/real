@@ -1,14 +1,14 @@
 import pygame
 import random
 import math
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import Polygon
 from shapely.ops import unary_union
 from ImageLoad import Imageload
 
-VISION_CIRCLE = "circle"
-VISION_CONE = "cone"
-VISION_RECTANGLE = "rectangle"
-VISION_LINE = "line"
+VISION_CIRCLE = "circle"       # 360도 원형 시야
+VISION_CONE = "cone"            # 지정한 각도의 부채꼴 시야
+VISION_RECTANGLE = "rectangle"  # 전방 직사각형 시야
+VISION_LINE = "line"            # 전방의 얇은 직선 시야
 # [커스텀 가능] 타일 한 칸의 픽셀 크기입니다. 맵 해상도와 렌더링 비용에 영향을 줍니다.
 DEFAULT_TILE_SIZE = 32
 
@@ -31,10 +31,10 @@ class TileGenerator:
         self.world_surface = None
         self._scaled_world_surface = None
         self._scaled_world_zoom = None
+        # 플레이어와 목표 지점의 타일 단위 시야 판정 캐시입니다.
         self._visibility_cache = {}
-        self._visibility_cache_key = None
+        # 시야 계산에 사용할 벽 타일 목록입니다.
         self._vision_wall_rects = None
-        self._vision_wall_union = None
         
         # 이미지 풀링 생성
         self._load_placeholder_images()
@@ -98,7 +98,7 @@ class TileGenerator:
         self.tile_images[3] = treasure
 
     def generate_map(self, width_tiles, height_tiles, seed_value=None):
-        """★멀티플레이 동동화 핵심★: 서버 시드로 난수를 고정하여 모두에게 똑같은 집을 배치합니다."""
+        """★멀티플레이 동기화 핵심★: 서버 시드로 난수를 고정하여 모두에게 똑같은 집을 배치합니다."""
         if seed_value is not None:
             random.seed(seed_value) # 👈 이 구문이 돌면서 모든 유저 컴퓨터의 난수 발생 순서가 고정됩니다.
 
@@ -169,9 +169,7 @@ class TileGenerator:
 
         self._build_world_surface()
         self._visibility_cache.clear()
-        self._visibility_cache_key = None
         self._vision_wall_rects = None
-        self._vision_wall_union = None
 
     def _build_world_surface(self):
         """정적인 맵을 한 장으로 합쳐 매 프레임 타일을 반복 그리지 않습니다."""
@@ -285,7 +283,8 @@ class TileGenerator:
         fov_angle=90,
         vision_width=None,
     ):
-        """시야 모양과 벽 가림을 함께 판정합니다."""
+        """거리, 시야 모양, 벽 가림을 순서대로 판정합니다."""
+        # 같은 타일 사이의 판정은 방향을 10도 단위로 묶어 재사용합니다.
         cache_key = (
             int(player_x // self.tile_size),
             int(player_y // self.tile_size),
@@ -300,38 +299,58 @@ class TileGenerator:
         if cache_key in self._visibility_cache:
             return self._visibility_cache[cache_key]
 
-        delta_x = point_x - player_x
-        delta_y = point_y - player_y
-        distance_squared = delta_x * delta_x + delta_y * delta_y
-        radius_squared = max_radius * max_radius
-        if distance_squared > radius_squared:
+        if not self._is_point_in_vision_shape(
+            player_x,
+            player_y,
+            point_x,
+            point_y,
+            max_radius,
+            vision_shape,
+            direction_angle,
+            fov_angle,
+            vision_width,
+        ):
             self._visibility_cache[cache_key] = False
             return False
 
-        if vision_shape != VISION_CIRCLE:
-            angle = math.radians(direction_angle)
-            forward = delta_x * math.cos(angle) + delta_y * math.sin(angle)
-            side = -delta_x * math.sin(angle) + delta_y * math.cos(angle)
-            width = vision_width or max_radius * 0.5
-            width = min(width, 48) if vision_shape == VISION_LINE else width
-
-            shape_limits = {
-                VISION_CONE: (
-                    forward >= 0
-                    and abs(math.degrees(math.atan2(side, forward))) <= fov_angle / 2
-                ),
-                VISION_RECTANGLE: 0 <= forward <= max_radius and abs(side) <= width / 2,
-                VISION_LINE: 0 <= forward <= max_radius and abs(side) <= width / 2,
-            }
-            if not shape_limits.get(vision_shape, True):
-                self._visibility_cache[cache_key] = False
-                return False
-
+        # 모양 안에 있어도 벽이 사이에 있으면 보이지 않습니다.
         is_visible = not self._is_wall_between(player_x, player_y, point_x, point_y)
         self._visibility_cache[cache_key] = is_visible
         if len(self._visibility_cache) > 20000:
             self._visibility_cache.clear()
         return is_visible
+
+    def _is_point_in_vision_shape(
+        self,
+        player_x,
+        player_y,
+        point_x,
+        point_y,
+        max_radius,
+        vision_shape,
+        direction_angle,
+        fov_angle,
+        vision_width,
+    ):
+        """벽 계산을 하기 전에 점이 시야 모양 안에 있는지 확인합니다."""
+        delta_x = point_x - player_x
+        delta_y = point_y - player_y
+        if delta_x * delta_x + delta_y * delta_y > max_radius * max_radius:
+            return False
+        if vision_shape == VISION_CIRCLE:
+            return True
+
+        direction = math.radians(direction_angle)
+        forward = delta_x * math.cos(direction) + delta_y * math.sin(direction)
+        side = -delta_x * math.sin(direction) + delta_y * math.cos(direction)
+        width = vision_width or max_radius * 0.5
+        if vision_shape == VISION_LINE:
+            width = min(width, 48)
+        if vision_shape == VISION_CONE:
+            return forward >= 0 and abs(math.degrees(math.atan2(side, forward))) <= fov_angle / 2
+        if vision_shape in (VISION_RECTANGLE, VISION_LINE):
+            return 0 <= forward <= max_radius and abs(side) <= width / 2
+        return True
 
     def is_tile_visible_from(self, player_x, player_y, tile_world_x, tile_world_y, max_radius=250, **vision_options):
         """타일의 중심에서 플레이어까지 직선으로 보이는지 확인. 벽이 있으면 가려짐."""
@@ -357,103 +376,63 @@ class TileGenerator:
         vision_width=None,
         ray_samples=24,
     ):
-        """벽 모서리를 따라 잘리는 월드 좌표 시야 폴리곤을 계산합니다."""
-        origin = (player_x, player_y)
+        """시야 모양을 만들고 벽 그림자를 제거합니다."""
+        # 1. 원형, 원뿔, 사각형, 직선 중 하나의 기본 모양을 만듭니다.
         direction = math.radians(direction_angle)
-        width = vision_width or max_radius * 0.5
+        width = vision_width or max_radius / 2
         if vision_shape == VISION_LINE:
             width = min(width, 48)
 
         if vision_shape == VISION_CIRCLE:
-            start_angle = direction - math.pi
-            end_angle = direction + math.pi
+            count = max(12, ray_samples * 2)
+            points = [
+                (player_x + max_radius * math.cos(2 * math.pi * i / count),
+                 player_y + max_radius * math.sin(2 * math.pi * i / count))
+                for i in range(count)
+            ]
         elif vision_shape == VISION_CONE:
-            half_fov = math.radians(fov_angle) / 2
-            start_angle = direction - half_fov
-            end_angle = direction + half_fov
+            half_angle = math.radians(fov_angle) / 2
+            points = [(player_x, player_y)]
+            for i in range(ray_samples + 1):
+                angle = direction - half_angle + 2 * half_angle * i / ray_samples
+                points.append((player_x + max_radius * math.cos(angle),
+                               player_y + max_radius * math.sin(angle)))
         else:
-            start_angle = direction - math.pi / 2
-            end_angle = direction + math.pi / 2
+            forward = pygame.Vector2(math.cos(direction), math.sin(direction)) * max_radius
+            side = pygame.Vector2(-math.sin(direction), math.cos(direction)) * width / 2
+            center = pygame.Vector2(player_x, player_y)
+            points = [center, center + side, center + forward + side,
+                      center + forward - side, center - side]
 
-        def base_point(angle):
-            if vision_shape in (VISION_RECTANGLE, VISION_LINE):
-                relative_angle = angle - direction
-                forward = max_radius
-                side = width / 2
-                cos_angle = math.cos(relative_angle)
-                sin_angle = math.sin(relative_angle)
-                if abs(sin_angle) > 0.0001:
-                    forward = min(forward, side / abs(sin_angle) * max(0.0001, cos_angle))
-                local_x = max(0, forward)
-                local_y = local_x * math.tan(relative_angle)
-                return (
-                    player_x + local_x * math.cos(direction) - local_y * math.sin(direction),
-                    player_y + local_x * math.sin(direction) + local_y * math.cos(direction),
-                )
-            return (
-                player_x + max_radius * math.cos(angle),
-                player_y + max_radius * math.sin(angle),
-            )
+        visible_shape = Polygon(points)
 
-        angles = [
-            start_angle + (end_angle - start_angle) * index / ray_samples
-            for index in range(ray_samples + 1)
-        ]
-        search_radius = max_radius + self.tile_size * 2
-        min_tile_x = max(0, int((player_x - search_radius) // self.tile_size))
-        max_tile_x = min(self.map_width - 1, int((player_x + search_radius) // self.tile_size))
-        min_tile_y = max(0, int((player_y - search_radius) // self.tile_size))
-        max_tile_y = min(self.map_height - 1, int((player_y + search_radius) // self.tile_size))
+        # 2. 가까운 벽만 그림자로 만들어 시야에서 제거합니다.
         if self._vision_wall_rects is None:
             self._vision_wall_rects = [
-                (tile_x * self.tile_size, tile_y * self.tile_size,
-                 (tile_x + 1) * self.tile_size, (tile_y + 1) * self.tile_size)
-                for (tile_x, tile_y), tile in self.map_data.items()
-                if tile.tile_type == 1
+                (x * self.tile_size, y * self.tile_size, (x + 1) * self.tile_size, (y + 1) * self.tile_size)
+                for (x, y), tile in self.map_data.items() if tile.tile_type == 1
             ]
-            self._vision_wall_union = unary_union([
-                Polygon([(left, top), (right, top), (right, bottom), (left, bottom)])
-                for left, top, right, bottom in self._vision_wall_rects
-            ]) if self._vision_wall_rects else None
 
-        wall_rects = [
-            rect for rect in self._vision_wall_rects
-            if rect[2] >= player_x - search_radius and rect[0] <= player_x + search_radius
-            and rect[3] >= player_y - search_radius and rect[1] <= player_y + search_radius
-        ]
-        wall_union = self._vision_wall_union
-        if wall_union is not None:
-            for left, top, right, bottom in wall_rects:
-                for corner_x, corner_y in ((left, top), (right, top), (right, bottom), (left, bottom)):
-                    corner_angle = math.atan2(corner_y - player_y, corner_x - player_x)
-                    if start_angle - 0.01 <= corner_angle <= end_angle + 0.01:
-                        angles.extend((corner_angle - 0.0001, corner_angle, corner_angle + 0.0001))
-        else:
-            wall_union = None
+        search_radius = max_radius + self.tile_size
+        shadows = []
+        for left, top, right, bottom in self._vision_wall_rects:
+            if abs((left + right) / 2 - player_x) > search_radius or abs((top + bottom) / 2 - player_y) > search_radius:
+                continue
+            corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+            far_corners = []
+            for corner_x, corner_y in corners:
+                ray = pygame.Vector2(corner_x - player_x, corner_y - player_y)
+                if ray.length_squared() == 0:
+                    continue
+                far = pygame.Vector2(corner_x, corner_y) + ray.normalize() * (max_radius * 4)
+                far_corners.append((far.x, far.y))
+            if len(far_corners) == 4:
+                shadows.append(Polygon([*corners, *far_corners]).convex_hull)
 
-        points = []
-        for angle in sorted(set(angles)):
-            endpoint = base_point(angle)
-            ray = LineString([origin, endpoint])
-            closest_distance = max_radius
-            if wall_union is not None:
-                hit = ray.intersection(wall_union.boundary)
-                candidates = []
-                if not hit.is_empty:
-                    if hasattr(hit, "geoms"):
-                        candidates = [geometry for geometry in hit.geoms if hasattr(geometry, "x")]
-                    elif hasattr(hit, "x"):
-                        candidates = [hit]
-                for candidate in candidates:
-                    distance = math.hypot(candidate.x - player_x, candidate.y - player_y)
-                    if 0.01 < distance < closest_distance:
-                        closest_distance = distance
-                        endpoint = (candidate.x, candidate.y)
-            points.append(endpoint)
-
-        polygon_points = [origin, *points]
-        polygon = Polygon(polygon_points)
-        return list(polygon.exterior.coords)[:-1] if not polygon.is_empty else []
+        # 그림자를 한 번에 합치고 시야에서 뺍니다.
+        if shadows:
+            visible_shape = visible_shape.difference(unary_union(shadows))
+        return visible_shape
     
     def get_wall_rects(self, surface, camera_x, camera_y):
         """현재 화면 범위 안에 있는 집 벽 타일들의 '절대 좌표 Rect'를 추출 (시야 차단 연산 연동용)"""
