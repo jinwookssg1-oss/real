@@ -100,6 +100,8 @@ active_explosions = []
 pending_treasure_destroys = []
 screen_shake = 0
 server_players = {}
+vision_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
+visibility_polygon_cache = {}
 
 def load_effect_sound(filename):
     """효과음 파일이 아직 없어도 게임이 실행되도록 선택적으로 로드합니다."""
@@ -146,6 +148,7 @@ def draw_ui_gauge(surface, x, y, current_val, max_val):
     frame_width, frame_height = HpBarFrame.get_size()
     ratio = max(0, min(current_val, max_val)) / max(1, max_val)
 
+    global hp_color
     # HpBar.png의 중앙 투명 영역 비율에 맞춘 내부 게이지 영역
     inner_x = int(frame_width * 0.11)
     inner_y = int(frame_height * 0.34)
@@ -459,6 +462,7 @@ def GameView():
     global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos, system_message
     global vision_shape_override, vision_skill_until, shield_until, haste_until
     global active_bombs, active_explosions, pending_treasure_destroys
+    global visibility_polygon_cache
 
     MousePos = pygame.mouse.get_pos()
     if my_player.Hp <= 0:
@@ -704,9 +708,9 @@ def GameView():
 
 
     
-    # 시야 바깥 영역을 검게 덮어서, 보이지 않는 영역은 아예 안 보이게 처리
-    dark_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
-    dark_overlay.fill((0, 0, 0, 0))
+    # 시야 폴리곤 바깥 영역을 검게 덮어서, 보이지 않는 영역은 아예 안 보이게 처리
+    dark_overlay = vision_overlay
+    dark_overlay.fill((0, 0, 0, 255))
 
     # 맵 바깥은 월드 타일이 없으므로 항상 검게 처리합니다.
     map_screen_left = -CameraPosX * camera_zoom
@@ -718,33 +722,35 @@ def GameView():
     pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (0, 0, max(0, map_screen_left), ScreenY))
     pygame.draw.rect(dark_overlay, (0, 0, 0, 255), (min(ScreenX, map_screen_right), 0, max(0, ScreenX - map_screen_right), ScreenY))
 
-    start_tile_x = max(0, int(CameraPosX // TileGene.tile_size))
-    end_tile_x = min(TileGene.map_width, int((CameraPosX + ScreenX / camera_zoom) // TileGene.tile_size) + 1)
-    start_tile_y = max(0, int(CameraPosY // TileGene.tile_size))
-    end_tile_y = min(TileGene.map_height, int((CameraPosY + ScreenY / camera_zoom) // TileGene.tile_size) + 1)
-
-
-    # 시야 범위 밖의 타일을 검게 덮기 / 타일 객체 순환하면서 시야밖에 있다면 검고 투명한 색으로 전환
-    for tile_y in range(start_tile_y, end_tile_y):
-        for tile_x in range(start_tile_x, end_tile_x):
-            tile = TileGene.map_data.get((tile_x, tile_y))
-            if not tile:
-                continue
-
-            world_x = tile_x * TileGene.tile_size
-            world_y = tile_y * TileGene.tile_size
-            screen_x = (world_x - CameraPosX) * camera_zoom
-            screen_y = (world_y - CameraPosY) * camera_zoom
-
-            if not is_visible(
-                world_x + TileGene.tile_size // 2,
-                world_y + TileGene.tile_size // 2,
-            ):
-                pygame.draw.rect(
-                    dark_overlay,
-                    (0, 0, 0, 200),
-                    pygame.Rect(screen_x, screen_y, TileGene.tile_size * camera_zoom, TileGene.tile_size * camera_zoom)
-                )
+    polygon_cache_key = (
+        round(player_world_x / 8),
+        round(player_world_y / 8),
+        round(Weapon_Angle / 4),
+        current_vision_shape,
+        current_vision.vision_radius,
+        current_vision.vision_fov,
+        current_vision.vision_width,
+    )
+    if polygon_cache_key not in visibility_polygon_cache:
+        visibility_polygon_cache[polygon_cache_key] = TileGene.get_visibility_polygon(
+            player_world_x,
+            player_world_y,
+            current_vision.vision_radius,
+            vision_shape=current_vision_shape,
+            direction_angle=Weapon_Angle,
+            fov_angle=current_vision.vision_fov,
+            vision_width=current_vision.vision_width,
+            ray_samples=24,
+        )
+        if len(visibility_polygon_cache) > 64:
+            visibility_polygon_cache.pop(next(iter(visibility_polygon_cache)))
+    visibility_polygon = visibility_polygon_cache[polygon_cache_key]
+    if visibility_polygon:
+        polygon_screen_points = [
+            ((world_x - CameraPosX) * camera_zoom, (world_y - CameraPosY) * camera_zoom)
+            for world_x, world_y in visibility_polygon
+        ]
+        pygame.draw.polygon(dark_overlay, (0, 0, 0, 0), polygon_screen_points)
 
     display.blit(dark_overlay, (0, 0))
 

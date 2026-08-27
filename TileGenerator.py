@@ -1,6 +1,8 @@
 import pygame
 import random
 import math
+from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 from ImageLoad import Imageload
 
 VISION_CIRCLE = "circle"
@@ -8,7 +10,7 @@ VISION_CONE = "cone"
 VISION_RECTANGLE = "rectangle"
 VISION_LINE = "line"
 # [커스텀 가능] 타일 한 칸의 픽셀 크기입니다. 맵 해상도와 렌더링 비용에 영향을 줍니다.
-DEFAULT_TILE_SIZE = 1
+DEFAULT_TILE_SIZE = 32
 
 class Tile:
     def __init__(self, tile_type, is_walkable):
@@ -27,8 +29,12 @@ class TileGenerator:
         self.map_width = 0
         self.map_height = 0
         self.world_surface = None
+        self._scaled_world_surface = None
+        self._scaled_world_zoom = None
         self._visibility_cache = {}
         self._visibility_cache_key = None
+        self._vision_wall_rects = None
+        self._vision_wall_union = None
         
         # 이미지 풀링 생성
         self._load_placeholder_images()
@@ -164,6 +170,8 @@ class TileGenerator:
         self._build_world_surface()
         self._visibility_cache.clear()
         self._visibility_cache_key = None
+        self._vision_wall_rects = None
+        self._vision_wall_union = None
 
     def _build_world_surface(self):
         """정적인 맵을 한 장으로 합쳐 매 프레임 타일을 반복 그리지 않습니다."""
@@ -177,6 +185,8 @@ class TileGenerator:
                 self.tile_images[tile.tile_type],
                 (tile_x * self.tile_size, tile_y * self.tile_size),
             )
+            self._scaled_world_surface = None
+            self._scaled_world_zoom = None
 
     def draw(self, surface, camera_x, camera_y, zoom=1.0):
         """미리 합성한 월드 Surface를 카메라 위치에 맞춰 그립니다."""
@@ -184,11 +194,13 @@ class TileGenerator:
             if zoom == 1.0:
                 surface.blit(self.world_surface, (-int(camera_x), -int(camera_y)))
             else:
-                scaled_world = pygame.transform.smoothscale(
-                    self.world_surface,
-                    (round(self.world_surface.get_width() * zoom), round(self.world_surface.get_height() * zoom)),
-                )
-                surface.blit(scaled_world, (-round(camera_x * zoom), -round(camera_y * zoom)))
+                if self._scaled_world_zoom != zoom:
+                    self._scaled_world_surface = pygame.transform.smoothscale(
+                        self.world_surface,
+                        (round(self.world_surface.get_width() * zoom), round(self.world_surface.get_height() * zoom)),
+                    )
+                    self._scaled_world_zoom = zoom
+                surface.blit(self._scaled_world_surface, (-round(camera_x * zoom), -round(camera_y * zoom)))
 
     def clamp_camera(self, camera_x, camera_y, screen_width, screen_height, zoom=1.0):
         """카메라가 맵 바깥을 향하지 않도록 월드 좌표에서 제한합니다."""
@@ -333,6 +345,115 @@ class TileGenerator:
             max_radius,
             **vision_options,
         )
+
+    def get_visibility_polygon(
+        self,
+        player_x,
+        player_y,
+        max_radius=250,
+        vision_shape=VISION_CIRCLE,
+        direction_angle=0,
+        fov_angle=90,
+        vision_width=None,
+        ray_samples=24,
+    ):
+        """벽 모서리를 따라 잘리는 월드 좌표 시야 폴리곤을 계산합니다."""
+        origin = (player_x, player_y)
+        direction = math.radians(direction_angle)
+        width = vision_width or max_radius * 0.5
+        if vision_shape == VISION_LINE:
+            width = min(width, 48)
+
+        if vision_shape == VISION_CIRCLE:
+            start_angle = direction - math.pi
+            end_angle = direction + math.pi
+        elif vision_shape == VISION_CONE:
+            half_fov = math.radians(fov_angle) / 2
+            start_angle = direction - half_fov
+            end_angle = direction + half_fov
+        else:
+            start_angle = direction - math.pi / 2
+            end_angle = direction + math.pi / 2
+
+        def base_point(angle):
+            if vision_shape in (VISION_RECTANGLE, VISION_LINE):
+                relative_angle = angle - direction
+                forward = max_radius
+                side = width / 2
+                cos_angle = math.cos(relative_angle)
+                sin_angle = math.sin(relative_angle)
+                if abs(sin_angle) > 0.0001:
+                    forward = min(forward, side / abs(sin_angle) * max(0.0001, cos_angle))
+                local_x = max(0, forward)
+                local_y = local_x * math.tan(relative_angle)
+                return (
+                    player_x + local_x * math.cos(direction) - local_y * math.sin(direction),
+                    player_y + local_x * math.sin(direction) + local_y * math.cos(direction),
+                )
+            return (
+                player_x + max_radius * math.cos(angle),
+                player_y + max_radius * math.sin(angle),
+            )
+
+        angles = [
+            start_angle + (end_angle - start_angle) * index / ray_samples
+            for index in range(ray_samples + 1)
+        ]
+        search_radius = max_radius + self.tile_size * 2
+        min_tile_x = max(0, int((player_x - search_radius) // self.tile_size))
+        max_tile_x = min(self.map_width - 1, int((player_x + search_radius) // self.tile_size))
+        min_tile_y = max(0, int((player_y - search_radius) // self.tile_size))
+        max_tile_y = min(self.map_height - 1, int((player_y + search_radius) // self.tile_size))
+        if self._vision_wall_rects is None:
+            self._vision_wall_rects = [
+                (tile_x * self.tile_size, tile_y * self.tile_size,
+                 (tile_x + 1) * self.tile_size, (tile_y + 1) * self.tile_size)
+                for (tile_x, tile_y), tile in self.map_data.items()
+                if tile.tile_type == 1
+            ]
+            self._vision_wall_union = unary_union([
+                Polygon([(left, top), (right, top), (right, bottom), (left, bottom)])
+                for left, top, right, bottom in self._vision_wall_rects
+            ]) if self._vision_wall_rects else None
+
+        wall_rects = [
+            rect for rect in self._vision_wall_rects
+            if rect[2] >= player_x - search_radius and rect[0] <= player_x + search_radius
+            and rect[3] >= player_y - search_radius and rect[1] <= player_y + search_radius
+        ]
+        wall_union = self._vision_wall_union
+        if wall_union is not None:
+            for left, top, right, bottom in wall_rects:
+                for corner_x, corner_y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+                    corner_angle = math.atan2(corner_y - player_y, corner_x - player_x)
+                    if start_angle - 0.01 <= corner_angle <= end_angle + 0.01:
+                        angles.extend((corner_angle - 0.0001, corner_angle, corner_angle + 0.0001))
+        else:
+            wall_union = None
+
+        points = []
+        for angle in sorted(set(angles)):
+            endpoint = base_point(angle)
+            ray = LineString([origin, endpoint])
+            closest_distance = max_radius
+            if wall_union is not None:
+                hit = ray.intersection(wall_union.boundary)
+                candidates = []
+                if not hit.is_empty:
+                    if hasattr(hit, "geoms"):
+                        candidates = [geometry for geometry in hit.geoms if hasattr(geometry, "x")]
+                    elif hasattr(hit, "x"):
+                        candidates = [hit]
+                for candidate in candidates:
+                    distance = math.hypot(candidate.x - player_x, candidate.y - player_y)
+                    if 0.01 < distance < closest_distance:
+                        closest_distance = distance
+                        endpoint = (candidate.x, candidate.y)
+            points.append(endpoint)
+
+        polygon_points = [origin, *points]
+        polygon = Polygon(polygon_points)
+        return list(polygon.exterior.coords)[:-1] if not polygon.is_empty else []
     
     def get_wall_rects(self, surface, camera_x, camera_y):
         """현재 화면 범위 안에 있는 집 벽 타일들의 '절대 좌표 Rect'를 추출 (시야 차단 연산 연동용)"""
