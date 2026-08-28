@@ -336,7 +336,7 @@ def handle_key_event(event, _mouse_pos):
         pygame.K_v: lambda _key: cycle_vision_shape(),
         pygame.K_q: lambda _key: activate_quick_slot(_key),
         pygame.K_e: lambda _key: activate_quick_slot(_key),
-        pygame.K_r: lambda _key: activate_skill_or_reload(_key),
+        pygame.K_f: lambda _key: activate_skill_or_reload(_key),
         pygame.K_1: lambda _key: select_weapon("pistol"),
         pygame.K_2: lambda _key: select_weapon("rifle"),
         pygame.K_3: lambda _key: select_weapon("shotgun"),

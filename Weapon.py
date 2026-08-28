@@ -31,7 +31,7 @@ WEAPONS = {
         bullet_lifetime=2.4, vision_radius=500, vision_fov=95, vision_width=240,
     ),
     "rifle": WeaponConfig(
-        "라이플", damage=12, magazine_size=20, reserve_ammo=60, fire_interval=0.12,
+        "라이플", damage=12, magazine_size=20, reserve_ammo=60, fire_interval=0.012,
         reload_time=2.1, bullet_size=4, bullet_speed=23.0, recoil=1.6,
         bullet_lifetime=2.6, vision_radius=700, vision_fov=75, vision_width=180,
     ),
@@ -42,7 +42,7 @@ WEAPONS = {
         vision_radius=300, vision_fov=120, vision_width=300,
     ),
     "sniper": WeaponConfig(
-        "저격총", damage=30, magazine_size=5, reserve_ammo=15, fire_interval=1.1,
+        "저격총", damage=5, magazine_size=10, reserve_ammo=15, fire_interval=1.1,
         reload_time=3.1, bullet_size=6, bullet_speed=32.0, recoil=8.0,
         bullet_lifetime=3.8, vision_shape="line", vision_radius=2000, vision_width=32,
     ),
