@@ -21,7 +21,13 @@ pygame.display.set_caption("전설적인 게임")
 display = pygame.display.set_mode((ScreenX, ScreenY), 0, 32)
 clock = pygame.time.Clock()
 ScreenState = "MainView"
-GuiFont = pygame.font.SysFont("malgungothic", 30)
+# [커스텀 가능] 게임 전체에서 사용할 기본 폰트입니다. 서체와 크기를 여기서 조정합니다.
+GuiFont = pygame.font.Font(
+    os.path.join(
+        os.path.dirname(
+            os.path.abspath(__file__)
+            ),"Font","HeirofLightRegular.ttf"
+            ), 30)
 
 
 
@@ -38,6 +44,7 @@ print(f"내 아이디:{my_id}번 입니다.")
 map = random.seed(init_data["seed"])  # 시드 고정
 IML = Imageload()
 set_ui_assets(IML.SkillWindow, IML.QuickSlot)
+set_image_loader(IML)  # SkillAndSlot에 이미지 로더 전달
 TileGene = TileGenerator()
 # [커스텀 가능] 맵 가로/세로 타일 수입니다. 타일 크기와 곱해 전체 월드 크기가 결정됩니다.
 TileGene.generate_map(200, 200, seed_value=init_data["seed"])
@@ -104,6 +111,7 @@ server_players = {}
 vision_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
 # 방향과 모양이 크게 바뀔 때만 시야 폴리곤을 다시 계산합니다.
 visibility_polygon_cache = {}
+mouse_fire_hold = False
 
 def draw_visibility_geometry(surface, geometry, camera_x, camera_y, zoom):
     """시야 부분을 마스크에서 투명하게 뚫습니다."""
@@ -195,7 +203,8 @@ def draw_ui_gauge(surface, x, y, current_val, max_val):
 def draw_ammo_status(surface):
     """현재 무기와 탄창/예비 탄약을 화면 오른쪽 아래에 표시합니다."""
     config = weapon_state.config
-    ammo_font = pygame.font.SysFont("malgungothic", 24)
+    # [커스텀 가능] 탄약 표시 폰트: 서체("malgungothic"), 크기(24)
+    ammo_font = GuiFont
     name_text = ammo_font.render(config.name, True, (255, 220, 120))
     if weapon_state.is_reloading_now():
         ammo_text = ammo_font.render("재장전 중...", True, (255, 180, 120))
@@ -205,9 +214,27 @@ def draw_ammo_status(surface):
     surface.blit(ammo_text, (ScreenX - 80, ScreenY - 72))
 
 
+def draw_quick_slot_cooldowns(surface):
+    """스킬 쿨타임을 각 슬롯에 표시합니다."""
+    now = pygame.time.get_ticks()
+    for slot in quick_slots:
+        if not slot.assigned_skill:
+            continue
+        end_time = skill_cooldowns.get(slot.assigned_skill, 0)
+        if end_time <= now:
+            continue
+        remain = max(0.0, (end_time - now) / 1000.0)
+        overlay = pygame.Surface((slot.rect.width, slot.rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(overlay, (0, 0, 0, 170), overlay.get_rect(), border_radius=8)
+        surface.blit(overlay, slot.rect.topleft)
+        # [커스텀 가능] 쿨타임 표시 폰트: 서체("malgungothic"), 크기(14)
+        text = GuiFont.render(f"{remain:.1f}s", True, (255, 255, 255))
+        surface.blit(text, (slot.rect.centerx - text.get_width() / 2, slot.rect.centery - 8))
+
 
 def MainView():
     global running, ScreenState
+    # [커스텀 가능] 메인 화면 타이틀 (GuiFont는 기본 폰트)
     gf = GuiFont.render("안녕하살법 전설적인 테스트", 1, pygame.Color("White"))
     display.blit(gf, (20, 20))
 
@@ -223,8 +250,8 @@ def MainView():
 
 def GameOverView():
     global running
-    title = pygame.font.SysFont("malgungothic", 96).render("게임 오버", True, (220, 50, 50))
-    guide = pygame.font.SysFont("malgungothic", 32).render("ESC를 눌러 종료하세요", True, (255, 255, 255))
+    title = GuiFont.render("게임 오버", True, (220, 50, 50))
+    guide = GuiFont.render("ESC를 눌러 종료하세요", True, (255, 255, 255))
     display.blit(title, title.get_rect(center=(ScreenX // 2, ScreenY // 2 - 60)))
     display.blit(guide, guide.get_rect(center=(ScreenX // 2, ScreenY // 2 + 70)))
 
@@ -336,6 +363,8 @@ def handle_key_event(event, _mouse_pos):
         pygame.K_v: lambda _key: cycle_vision_shape(),
         pygame.K_q: lambda _key: activate_quick_slot(_key),
         pygame.K_e: lambda _key: activate_quick_slot(_key),
+        pygame.K_t: lambda _key: activate_quick_slot(_key),
+        pygame.K_r: lambda _key: reload_weapon(),
         pygame.K_f: lambda _key: activate_skill_or_reload(_key),
         pygame.K_1: lambda _key: select_weapon("pistol"),
         pygame.K_2: lambda _key: select_weapon("rifle"),
@@ -362,6 +391,44 @@ def cycle_vision_shape():
     system_message = f"시야 모양: {shape_name}" 
 
 
+def fire_knife():
+    """칼 공격: 근거리 범위 내의 모든 적에게 데미지를 줍니다."""
+    global screen_shake, system_message
+    config = weapon_state.config
+    
+    center_x, center_y = get_player_world_center(
+        my_player.X,
+        my_player.Y,
+        IML.Player.get_width(),
+        IML.Player.get_height(),
+    )
+    
+    # 칼 공격 범위 (데미지를 줄 최대 거리)
+    knife_range = 150
+    
+    # 근처 서버 플레이어 찾기
+    attacked_count = 0
+    for p_id, p_info in server_players.items():
+        if int(p_id) == my_id:
+            continue
+        
+        enemy_center_x = p_info["posX"] + IML.Player.get_width() / 2
+        enemy_center_y = p_info["posY"] + IML.Player.get_height() / 2
+        
+        # 거리 계산
+        distance = math.sqrt((center_x - enemy_center_x)**2 + (center_y - enemy_center_y)**2)
+        if distance <= knife_range:
+            attacked_count += 1
+    
+    weapon_state.consume_round()
+    screen_shake = min(8, screen_shake + 3)
+    
+    if attacked_count > 0:
+        system_message = f"칼 공격! {config.damage} 데미지 × {attacked_count}명"
+    else:
+        system_message = f"칼 휘둘렀습니다. (데미지: {config.damage})"
+
+
 def fire_bullet():
     global bullets, screen_shake, system_message
     config = weapon_state.config
@@ -369,11 +436,18 @@ def fire_bullet():
     if weapon_state.is_reloading_now():
         system_message = "재장전 중입니다."
         return
+    
+    # 칼 공격 특수 처리
+    if not config.projectile:
+        if not weapon_state.can_fire():
+            system_message = f"{config.name} 공격은 아직 준비 중입니다."
+            return
+        fire_knife()
+        return
+    
     if not weapon_state.can_fire():
         if config.projectile and weapon_state.magazine_ammo == 0:
             reload_weapon()
-        elif not config.projectile:
-            system_message = f"{config.name} 공격은 아직 준비 중입니다. 데미지: {config.damage}"
         return
 
     center_x, center_y = get_player_world_center(
@@ -423,8 +497,9 @@ def fire_bullet():
         reload_weapon()
 
 
+
 def handle_mouse_down(event, mouse_pos):
-    global dragging_skill
+    global dragging_skill, mouse_fire_hold
     if event.button != 1:
         return
 
@@ -434,12 +509,17 @@ def handle_mouse_down(event, mouse_pos):
         None,
     )
     if dragging_skill is None:
+        mouse_fire_hold = weapon_state.weapon_id == "rifle"
         fire_bullet()
 
 
 def handle_mouse_up(event, mouse_pos):
-    global dragging_skill, system_message
-    if event.button != 1 or not dragging_skill:
+    global dragging_skill, system_message, mouse_fire_hold
+    if event.button != 1:
+        mouse_fire_hold = False
+        return
+    mouse_fire_hold = False
+    if not dragging_skill:
         return
 
     slot = next(
@@ -475,7 +555,7 @@ def GameView():
     global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos, system_message
     global vision_shape_override, vision_skill_until, shield_until, haste_until
     global active_bombs, active_explosions, pending_treasure_destroys
-    global visibility_polygon_cache
+    global visibility_polygon_cache, mouse_fire_hold
 
     MousePos = pygame.mouse.get_pos()
     if my_player.Hp <= 0:
@@ -483,7 +563,10 @@ def GameView():
         return
     handle_game_events()
     Weapon_Pos = pygame.mouse.get_pos()
-    
+
+    if mouse_fire_hold and weapon_state.weapon_id == "rifle" and weapon_state.can_fire():
+        fire_bullet()
+
     my_player.handle_input()
     weapon_state.update_reload()
 
@@ -758,9 +841,10 @@ def GameView():
             direction_angle=Weapon_Angle,
             fov_angle=current_vision.vision_fov,
             vision_width=current_vision.vision_width,
-            ray_samples=24,
+            ray_samples=None,  # 자동 최적화 (저격총 직선은 8, 기타는 12)
         )
-        if len(visibility_polygon_cache) > 64:
+        # [최적화] 캐시 크기를 128로 증대 (저격총 직선은 각도 변화가 많음)
+        if len(visibility_polygon_cache) > 128:
             visibility_polygon_cache.pop(next(iter(visibility_polygon_cache)))
     visibility_polygon = visibility_polygon_cache[polygon_cache_key]
     if visibility_polygon:
@@ -798,9 +882,18 @@ def GameView():
             my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(),
             CameraPosX, CameraPosY, camera_zoom
         )
-        pygame.draw.circle(display, (100, 220, 255),
-                           (round(shield_center[0]), round(shield_center[1])),
-                           max(20, round(45 * camera_zoom)), 4)
+        # Protect.png 이미지가 있으면 반투명으로 표시
+        if IML.Protect:
+            protect_size = max(50, int(90 * camera_zoom))
+            protect_scaled = pygame.transform.scale(IML.Protect, (protect_size, protect_size))
+            protect_scaled.set_alpha(150)  # 150/255 = 약 60% 투명도
+            protect_rect = protect_scaled.get_rect(center=shield_center)
+            display.blit(protect_scaled, protect_rect)
+        else:
+            # Protect.png가 없으면 파란 원으로 표시
+            pygame.draw.circle(display, (100, 220, 255),
+                               (round(shield_center[0]), round(shield_center[1])),
+                               max(20, round(45 * camera_zoom)), 4)
 
     # =================================================================
     # 📊 고정 UI 그리기 영역 (시야 레이어보다 위에 그려야 선명하게 보입니다)
@@ -809,9 +902,11 @@ def GameView():
     ui_y = 80  
     draw_ui_gauge(display, ui_x, ui_y, my_player.Hp, my_player.MaxHp)
     
+    # [커스텀 가능] HP 텍스트 표시 폰트 (GuiFont 사용)
     hp_text = GuiFont.render(f"HP: {my_player.Hp} / {my_player.MaxHp}", True, (255, 255, 255))
     display.blit(hp_text, (ui_x + HP_FRAME_SIZE[0] + 15, ui_y + 42))
 
+    # [커스텀 가능] 플레이어 ID 표시 폰트 (GuiFont 사용)
     id_text = GuiFont.render(f"ID: {my_id}", True, (255, 255, 255))
     display.blit(id_text, (20, 20))
     
@@ -828,6 +923,7 @@ def GameView():
         slot.update(MousePos)  # 호버 상태 업데이트
         slot.draw(display)
 
+    draw_quick_slot_cooldowns(display)
     draw_ammo_status(display)
     
     # ★ [추가] 스킬 툴팁 그리기 (마우스 raycast 무시 - 드래그 중이 아닐 때만)
@@ -836,16 +932,20 @@ def GameView():
 
     # 시스템 메시지
     if system_message:
+        # [커스텀 가능] 시스템 메시지 텍스트 폰트 (GuiFont 사용)
         message_text = GuiFont.render(system_message, True, (255, 255, 255))
         display.blit(message_text, (30, ScreenY - 40))
     
     # 스킬 창 상태 표시 (우측 상단)
     skill_status = "📖 스킬 창: [OPEN - K]" if skill_window_open else "📖 스킬 창: [닫음 - K]"
+    # [커스텀 가능] 스킬 상태 폰트 (GuiFont 사용)
     status_text = GuiFont.render(skill_status, True, (100, 200, 255) if skill_window_open else (100, 100, 100))
     display.blit(status_text, (ScreenX - 300, 20))
     vision_status = f"시야: {current_vision_shape} [V]"
+    # [커스텀 가능] 시야 정보 폰트 (GuiFont 사용)
     vision_text = GuiFont.render(vision_status, True, (255, 220, 120))
     display.blit(vision_text, (ScreenX - 300, 55))
+    # [커스텀 가능] 카메라 FOV 정보 폰트 (GuiFont 사용)
     fov_text = GuiFont.render(f"카메라 FOV: {camera_fov:.2f} / 최대 {CAMERA_FOV_MAX:.2f}", True, (180, 230, 255))
     display.blit(fov_text, (ScreenX - 420, 90))
     # ------------------ [그리기 끝] ------------------

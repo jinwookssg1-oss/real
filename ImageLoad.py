@@ -29,6 +29,31 @@ class Imageload():
 
         self.SkillWindow = pygame.image.load(os.path.join(current_dir,"Image","SkillWindow.png")).convert_alpha()
         self.QuickSlot = pygame.image.load(os.path.join(current_dir, "Image", "QuickSlot.png")).convert_alpha()
+        
+        # ===== 스킬 아이콘 이미지 로드 =====
+        self.skill_icons = {}
+        skill_names = ["달팽이 세개", "레이징 블로우", "헤이스트", "매의 눈", "보호막"]
+        skill_files = ["Bomb.png", "SkillIcon2.png", "SkillIcon3.png", "egle_Eyes.png", "ProtectShield.png"]
+        
+        for skill_name, skill_file in zip(skill_names, skill_files):
+            try:
+                icon_path = os.path.join(current_dir, "Image", skill_file)
+                if os.path.exists(icon_path):
+                    icon = pygame.image.load(icon_path).convert_alpha()
+                    icon = pygame.transform.scale(icon, (70, 70))  # 스킬 슬롯 크기에 맞춤
+                    self.skill_icons[skill_name] = icon
+            except Exception:
+                self.skill_icons[skill_name] = None
+        
+        # 보호막 스킬 시각화용 이미지
+        try:
+            protect_path = os.path.join(current_dir, "Image", "Protect.png")
+            if os.path.exists(protect_path):
+                self.Protect = pygame.image.load(protect_path).convert_alpha()
+            else:
+                self.Protect = None
+        except Exception:
+            self.Protect = None
 
     # 2. 이미 크기가 줄어든 상태이므로 원본을 바로 리턴하면 됩니다.
     def GetShotGun(self, index=0):
@@ -40,3 +65,10 @@ class Imageload():
     def GetTileTest(self):
         return self.Tile
     
+    def GetSkillIcon(self, skill_name):
+        """스킬 아이콘 이미지 반환. 없으면 None"""
+        return self.skill_icons.get(skill_name, None)
+    
+    def GetProtectImage(self):
+        """보호막 스킬 시각화 이미지 반환"""
+        return self.Protect

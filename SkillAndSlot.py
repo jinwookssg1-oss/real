@@ -1,5 +1,13 @@
 import pygame
 
+# 글로벌 이미지 로더
+image_loader = None
+
+def set_image_loader(loader):
+    global image_loader
+    image_loader = loader
+
+
 
 FONT = None
 SKILL_WINDOW_IMAGE = None
@@ -64,17 +72,32 @@ class SkillWindowItem:
         self.is_hovering = self.rect.collidepoint(mouse_pos)
 
     def draw(self, surface):
+        global image_loader
         skill = SKILL_BOOK[self.skill_name]
         border_color = (255, 255, 0) if self.is_hovering else BLACK
         border_width = 3 if self.is_hovering else 2
+        
+        # 스킬 아이콘 이미지가 있으면 표시, 없으면 색상 박스 표시
         if SKILL_SLOT_IMAGE:
             surface.blit(SKILL_SLOT_IMAGE, self.rect)
         else:
             pygame.draw.rect(surface, skill.color, self.rect, border_radius=5)
-        pygame.draw.rect(surface, skill.color, self.rect.inflate(-12, -12), border_radius=4)
+        
+        # 스킬 아이콘 이미지 표시
+        if image_loader:
+            skill_icon = image_loader.GetSkillIcon(self.skill_name)
+            if skill_icon:
+                surface.blit(skill_icon, self.rect)
+            else:
+                pygame.draw.rect(surface, skill.color, self.rect.inflate(-12, -12), border_radius=4)
+                text = get_font().render(skill.name[:2], True, BLACK)
+                surface.blit(text, text.get_rect(center=self.rect.center))
+        else:
+            pygame.draw.rect(surface, skill.color, self.rect.inflate(-12, -12), border_radius=4)
+            text = get_font().render(skill.name[:2], True, BLACK)
+            surface.blit(text, text.get_rect(center=self.rect.center))
+        
         pygame.draw.rect(surface, border_color, self.rect, border_width, border_radius=5)
-        text = get_font().render(skill.name[:2], True, BLACK)
-        surface.blit(text, text.get_rect(center=self.rect.center))
 
 
 class QuickSlot:
@@ -88,6 +111,7 @@ class QuickSlot:
         self.is_hovering = self.rect.collidepoint(mouse_pos)
 
     def draw(self, surface):
+        global image_loader
         border_color = (255, 255, 100) if self.is_hovering else WHITE
         border_width = 3 if self.is_hovering else 2
         if QUICK_SLOT_IMAGE:
@@ -98,11 +122,24 @@ class QuickSlot:
         content_rect = self.rect.inflate(-12, -12)
         if self.assigned_skill:
             skill = SKILL_BOOK[self.assigned_skill]
-            pygame.draw.rect(surface, skill.color, content_rect, border_radius=4)
-            text = get_font().render(skill.name[:2], True, BLACK)
-            surface.blit(text, text.get_rect(center=(self.rect.centerx, self.rect.centery + 5)))
-            power_text = pygame.font.SysFont("malgungothic", 12).render(f"P:{skill.Power}", True, BLACK)
-            surface.blit(power_text, (self.rect.x + 5, self.rect.bottom - 20))
+            
+            # 스킬 아이콘 이미지가 있으면 표시
+            if image_loader:
+                skill_icon = image_loader.GetSkillIcon(self.assigned_skill)
+                if skill_icon:
+                    surface.blit(skill_icon, self.rect)
+                else:
+                    pygame.draw.rect(surface, skill.color, content_rect, border_radius=4)
+                    text = get_font().render(skill.name[:2], True, BLACK)
+                    surface.blit(text, text.get_rect(center=(self.rect.centerx, self.rect.centery + 5)))
+                    power_text = pygame.font.SysFont("malgungothic", 12).render(f"P:{skill.Power}", True, BLACK)
+                    surface.blit(power_text, (self.rect.x + 5, self.rect.bottom - 20))
+            else:
+                pygame.draw.rect(surface, skill.color, content_rect, border_radius=4)
+                text = get_font().render(skill.name[:2], True, BLACK)
+                surface.blit(text, text.get_rect(center=(self.rect.centerx, self.rect.centery + 5)))
+                power_text = pygame.font.SysFont("malgungothic", 12).render(f"P:{skill.Power}", True, BLACK)
+                surface.blit(power_text, (self.rect.x + 5, self.rect.bottom - 20))
         else:
             text = get_font().render("EMPTY", True, (150, 150, 150))
             surface.blit(text, text.get_rect(center=self.rect.center))
@@ -113,16 +150,16 @@ class QuickSlot:
 
 
 skill_window = [
-    SkillWindowItem(1220, 150, "달팽이 세개"),
-    SkillWindowItem(1450, 150, "레이징 블로우"),
-    SkillWindowItem(1680, 150, "헤이스트"),
-    SkillWindowItem(1220, 240, "매의 눈"),
-    SkillWindowItem(1450, 240, "보호막"),
+    SkillWindowItem(630, 150, "달팽이 세개"),
+    SkillWindowItem(860, 150, "레이징 블로우"),
+    SkillWindowItem(1090, 150, "헤이스트"),
+    SkillWindowItem(630, 240, "매의 눈"),
+    SkillWindowItem(860, 240, "보호막"),
 ]
 quick_slots = [
-    QuickSlot(1260, 920, "Q"),
-    QuickSlot(1380, 920, "E"),
-    QuickSlot(1500, 920, "R"),
+    QuickSlot(880, 920, "Q"),
+    QuickSlot(980, 920, "E"),
+    QuickSlot(1080, 920, "T"),
 ]
 
 dragging_skill = None
@@ -131,8 +168,8 @@ drag_offset_y = 0
 mouse_pos = (0, 0)
 system_message = "K를 눌러 스킬 창을 열고, 스킬을 드래그해서 하단 슬롯에 장착하세요!"
 
-SKILL_PANEL_RECT = pygame.Rect(1170, 870, 720, 180)
-SKILL_SOURCE_RECT = pygame.Rect(1170, 30, 720, 320)
+SKILL_PANEL_RECT = pygame.Rect(600, 870, 720, 180)
+SKILL_SOURCE_RECT = pygame.Rect(600, 30, 720, 320)
 
 
 def draw_skill_panel(surface):

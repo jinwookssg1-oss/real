@@ -374,9 +374,13 @@ class TileGenerator:
         direction_angle=0,
         fov_angle=90,
         vision_width=None,
-        ray_samples=24,
+        ray_samples=None,
     ):
-        """시야 모양을 만들고 벽 그림자를 제거합니다."""
+        """시야 모양을 만들고 벽 그림자를 제거합니다. (최적화: 저격총 직선은 ray 8개, 기타는 12개)"""
+        # 기본값 설정: 저격총(직선)은 8개, 나머지는 12개로 크게 줄임
+        if ray_samples is None:
+            ray_samples = 8 if vision_shape == VISION_LINE else 12
+        
         # 1. 원형, 원뿔, 사각형, 직선 중 하나의 기본 모양을 만듭니다.
         direction = math.radians(direction_angle)
         width = vision_width or max_radius / 2
@@ -384,7 +388,7 @@ class TileGenerator:
             width = min(width, 48)
 
         if vision_shape == VISION_CIRCLE:
-            count = max(12, ray_samples * 2)
+            count = max(8, ray_samples * 2)
             points = [
                 (player_x + max_radius * math.cos(2 * math.pi * i / count),
                  player_y + max_radius * math.sin(2 * math.pi * i / count))
@@ -413,7 +417,15 @@ class TileGenerator:
                 for (x, y), tile in self.map_data.items() if tile.tile_type == 1
             ]
 
-        search_radius = max_radius + self.tile_size
+        # [최적화] 저격총 같은 긴 시야는 시야각 폭만 체크 (좌우 side width)
+        # 직선 시야는 width가 좁으므로, 중앙 방향 근처만 체크하면 됨
+        if vision_shape == VISION_LINE:
+            # 직선 시야: 중앙 광선 기준으로 좌우만 체크
+            search_radius = max(max_radius * 0.3, width)  # 시야 폭 기준으로 검색
+        else:
+            # 원형/원뿔/사각형: 기존 대로 처리
+            search_radius = max_radius + self.tile_size
+        
         shadows = []
         for left, top, right, bottom in self._vision_wall_rects:
             if abs((left + right) / 2 - player_x) > search_radius or abs((top + bottom) / 2 - player_y) > search_radius:
