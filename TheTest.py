@@ -509,7 +509,7 @@ def handle_mouse_down(event, mouse_pos):
         None,
     )
     if dragging_skill is None:
-        mouse_fire_hold = weapon_state.weapon_id == "rifle"
+        mouse_fire_hold = weapon_state.config.automatic
         fire_bullet()
 
 
@@ -564,7 +564,7 @@ def GameView():
     handle_game_events()
     Weapon_Pos = pygame.mouse.get_pos()
 
-    if mouse_fire_hold and weapon_state.weapon_id == "rifle" and weapon_state.can_fire():
+    if mouse_fire_hold and weapon_state.config.automatic and weapon_state.can_fire():
         fire_bullet()
 
     my_player.handle_input()

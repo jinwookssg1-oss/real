@@ -9,6 +9,7 @@ class WeaponConfig:
     magazine_size: int
     reserve_ammo: int
     fire_interval: float
+    automatic: bool = False
     reload_time: float = 1.2
     bullet_size: int = 5
     bullet_speed: float = 15.0
@@ -32,6 +33,7 @@ WEAPONS = {
     ),
     "rifle": WeaponConfig(
         "라이플", damage=12, magazine_size=20, reserve_ammo=60, fire_interval=0.08,
+        automatic=True,
         reload_time=2.1, bullet_size=4, bullet_speed=23.0, recoil=1.6,
         bullet_lifetime=2.6, vision_radius=700, vision_fov=75, vision_width=180,
     ),
@@ -48,6 +50,7 @@ WEAPONS = {
     ),
     "smg": WeaponConfig(
         "기관단총", damage=5, magazine_size=50, reserve_ammo=100, fire_interval=0.08,
+        automatic=True,
         reload_time=1.8, bullet_size=4, bullet_speed=17.0, recoil=1.2,
         bullet_lifetime=1.8, vision_radius=400, vision_fov=130, vision_width=260,
     ),
