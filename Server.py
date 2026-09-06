@@ -1,14 +1,21 @@
 import socket
 import threading
 import pickle
-from Config import *
+import time
+from Config import (
+    DEFAULT_WEAPON_ID,
+    NETWORK_BUFFER_SIZE,
+    PLAYER_MAX_HP,
+    SERVER_IP,
+    SERVER_PORT,
+    SERVER_SEED,
+    STEALTH_DURATION_MS,
+)
+from Weapon import WEAPONS
 import random
-# Config.py가 있다면 거기서 가져와도 되고, 직접 지정해도 됩니다.
-SERVER_IP = "127.0.0.1"
-PORT = 5555  # Config의 ServerPort와 맞춰주세요.
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((SERVER_IP, PORT))
+server.bind((SERVER_IP, SERVER_PORT))
 server.listen()
 
 # 서버가 총괄하는 플레이어들의 실시간 딕셔너리
@@ -42,24 +49,27 @@ def handle_client(conn, player_id):
         last_sent_bullet_event_id = next_bullet_event_id - 1
 
     # 1. 접속한 클라이언트에게 고유 아이디 부여
-    conn.send(pickle.dumps({"init_id": player_id, "seed": 12345}))  # 초기 데이터 전송 (아이디, 시드 등)
+    conn.send(pickle.dumps({"init_id": player_id, "seed": SERVER_SEED}))
 
     # 플레이어 초기값 세팅
     players[player_id] = {
         "posX": 0,
         "posY": 0,
         "angle": 0.0,
-        "hp": 100,
-        "weapon_id": "pistol",
-        "magazine_ammo": 12,
-        "reserve_ammo": 36,
+        "hp": PLAYER_MAX_HP,
+        "weapon_id": DEFAULT_WEAPON_ID,
+        "magazine_ammo": WEAPONS[DEFAULT_WEAPON_ID].magazine_size,
+        "reserve_ammo": WEAPONS[DEFAULT_WEAPON_ID].reserve_ammo,
+        "stealth": False,
+        "stealth_token": 0,
+        "stealth_until": 0.0,
         "bullets": [],
     }
 
     try:
         while True:
             # 2. 클라이언트가 보낸 데이터(posX, posY, angle) 수신
-            data = conn.recv(4096)
+            data = conn.recv(NETWORK_BUFFER_SIZE)
             if not data:
                 break
 
@@ -73,13 +83,22 @@ def handle_client(conn, player_id):
             players[player_id]["posX"] = client_data["posX"]
             players[player_id]["posY"] = client_data["posY"]
             players[player_id]["angle"] = client_data["angle"]
-            players[player_id]["hp"] = max(0, client_data.get("hp", 100))
-            players[player_id]["weapon_id"] = client_data.get("weapon_id", "pistol")
+            players[player_id]["hp"] = max(0, client_data.get("hp", PLAYER_MAX_HP))
+            weapon_id = client_data.get("weapon_id", DEFAULT_WEAPON_ID)
+            players[player_id]["weapon_id"] = weapon_id if weapon_id in WEAPONS else DEFAULT_WEAPON_ID
             players[player_id]["magazine_ammo"] = max(
                 0, client_data.get("magazine_ammo", players[player_id]["magazine_ammo"])
             )
             players[player_id]["reserve_ammo"] = max(
                 0, client_data.get("reserve_ammo", players[player_id]["reserve_ammo"])
+            )
+            stealth_token = int(client_data.get("stealth_token", 0))
+            if stealth_token != players[player_id]["stealth_token"]:
+                players[player_id]["stealth_token"] = stealth_token
+                players[player_id]["stealth_until"] = time.monotonic() + STEALTH_DURATION_MS / 1000
+            players[player_id]["stealth"] = (
+                time.monotonic() < players[player_id]["stealth_until"]
+                and players[player_id]["stealth_token"] == stealth_token
             )
 
             with player_lock:

@@ -1,5 +1,6 @@
 import os
 import pygame
+from Config import SKILL_ICON_SIZE
 
 
 class Imageload():
@@ -32,15 +33,18 @@ class Imageload():
         
         # ===== 스킬 아이콘 이미지 로드 =====
         self.skill_icons = {}
-        skill_names = ["달팽이 세개", "레이징 블로우", "헤이스트", "매의 눈", "보호막"]
-        skill_files = ["Bomb.png", "SkillIcon2.png", "SkillIcon3.png", "egle_Eyes.png", "ProtectShield.png"]
+        skill_names = ["달팽이 세개", "레이징 블로우", "헤이스트", "매의 눈", "보호막", "은신"]
+        skill_files = [
+            "Bomb.png", "SkillIcon2.png", "SkillIcon3.png", "egle_Eyes.png",
+            "ProtectShield.png", "Invis.png",
+        ]
         
         for skill_name, skill_file in zip(skill_names, skill_files):
             try:
                 icon_path = os.path.join(current_dir, "Image", skill_file)
                 if os.path.exists(icon_path):
                     icon = pygame.image.load(icon_path).convert_alpha()
-                    icon = pygame.transform.scale(icon, (70, 70))  # 스킬 슬롯 크기에 맞춤
+                    icon = pygame.transform.scale(icon, (SKILL_ICON_SIZE, SKILL_ICON_SIZE))
                     self.skill_icons[skill_name] = icon
             except Exception:
                 self.skill_icons[skill_name] = None

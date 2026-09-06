@@ -13,8 +13,7 @@ from PlayerClass import Player
 from Tool_Cordinate import *
 from SkillAndSlot import *
 from Weapon import WeaponState, WEAPONS, WEAPON_KEYS
-
-fps = 64
+from Effects import ParticleSystem
 
 pygame.init()
 pygame.display.set_caption("전설적인 게임")
@@ -47,10 +46,9 @@ set_ui_assets(IML.SkillWindow, IML.QuickSlot)
 set_image_loader(IML)  # SkillAndSlot에 이미지 로더 전달
 TileGene = TileGenerator()
 # [커스텀 가능] 맵 가로/세로 타일 수입니다. 타일 크기와 곱해 전체 월드 크기가 결정됩니다.
-TileGene.generate_map(200, 200, seed_value=init_data["seed"])
+TileGene.generate_map(MAP_WIDTH_TILES, MAP_HEIGHT_TILES, seed_value=init_data["seed"])
 
 # [커스텀 가능] HP 프레임의 화면 표시 크기입니다. 원본 비율을 유지해 한 번만 축소합니다.
-HP_FRAME_SIZE = (360, 120)
 HpBarFrame = pygame.transform.smoothscale(IML.HpBar, HP_FRAME_SIZE)
 
 # 🕹️ [Player 클래스 인스턴스 생성 - 랜덤 스폰]
@@ -58,8 +56,8 @@ p_w = IML.Player.get_width()
 p_h = IML.Player.get_height()
 
 # [커스텀 가능] 안전 스폰을 찾을 타일 좌표 범위입니다.
-safe_spawn = TileGene.find_safe_spawn(40, 160, 40, 160)
-spawn_tile_x, spawn_tile_y = safe_spawn or (100, 100)
+safe_spawn = TileGene.find_safe_spawn(SPAWN_MIN_X, SPAWN_MAX_X, SPAWN_MIN_Y, SPAWN_MAX_Y)
+spawn_tile_x, spawn_tile_y = safe_spawn or (MAP_WIDTH_TILES // 2, MAP_HEIGHT_TILES // 2)
 spawn_world_x = spawn_tile_x * TileGene.tile_size
 spawn_world_y = spawn_tile_y * TileGene.tile_size
 
@@ -73,13 +71,13 @@ send_data = {
     # 플레이어 정보
     "posX": 0,          # 플레이어 X 좌표
     "posY": 0,          # 플레이어 Y 좌표
-    "hp": 100,          # 플레이어 체력
+    "hp": PLAYER_MAX_HP, # 플레이어 체력
     
     # 무기 정보
     "angle": 0.0,       # 무기(총) 각도
-    "weapon_id": "pistol",
-    "magazine_ammo": 12,
-    "reserve_ammo": 36,
+    "weapon_id": DEFAULT_WEAPON_ID,
+    "magazine_ammo": WEAPONS[DEFAULT_WEAPON_ID].magazine_size,
+    "reserve_ammo": WEAPONS[DEFAULT_WEAPON_ID].reserve_ammo,
     
     # 발사한 총알 정보 (여러 개 가능)
     "bullets": [],      # [{"x": x, "y": y, "angle": angle}, ...]
@@ -102,11 +100,17 @@ skill_cooldowns = {}
 vision_skill_until = 0
 shield_until = 0
 haste_until = 0
+stealth_until = 0
+stealth_token = 0
 active_bombs = []
 active_explosions = []
+supply_drops = []
+next_supply_drop_at = pygame.time.get_ticks() + SUPPLY_DROP_INTERVAL_MS
 pending_treasure_destroys = []
 screen_shake = 0
 server_players = {}
+particles = ParticleSystem()
+last_effect_tick = pygame.time.get_ticks()
 # 시야 밖을 검게 덮을 때 재사용하는 투명 레이어입니다.
 vision_overlay = pygame.Surface((ScreenX, ScreenY), pygame.SRCALPHA)
 # 방향과 모양이 크게 바뀔 때만 시야 폴리곤을 다시 계산합니다.
@@ -145,12 +149,67 @@ def play_effect_sound(sound, filename):
         print(f"[사운드 재생 실패] {filename}: {error}")
 
 
+def spawn_supply_drop(now):
+    """안전한 바닥 타일에 보급품을 하나 생성합니다."""
+    # 벽이나 집 안에 생성되면 플레이어가 접근할 수 없으므로
+    # TileGenerator가 찾은 이동 가능한 타일의 중앙에 배치합니다.
+    spawn_tile = TileGene.find_safe_spawn(2, TileGene.map_width - 3, 2, TileGene.map_height - 3)
+    if not spawn_tile:
+        return
+    tile_x, tile_y = spawn_tile
+    reward_type = random.choice(SUPPLY_REWARD_TYPES)
+    supply_drops.append({
+        "x": (tile_x + 0.5) * TileGene.tile_size,
+        "y": (tile_y + 0.5) * TileGene.tile_size,
+        "type": reward_type,
+        "expires_at": now + SUPPLY_DROP_LIFETIME_MS,
+    })
+
+
+def apply_supply_reward(reward_type):
+    """보급품 종류별 회복·버프 효과를 적용합니다."""
+    # 보급품은 서버에 아이템 자체를 동기화하지 않고,
+    # 획득한 클라이언트의 플레이어 상태에만 효과를 적용합니다.
+    now = pygame.time.get_ticks()
+    center_x, center_y = get_player_world_center(
+        my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height()
+    )
+    if reward_type == "heal":
+        my_player.Hp = min(my_player.MaxHp, my_player.Hp + SUPPLY_HEAL_AMOUNT)
+        message = f"보급품 획득: 체력 +{SUPPLY_HEAL_AMOUNT}"
+        color = (100, 255, 130)
+    elif reward_type == "haste":
+        global haste_until
+        haste_until = max(haste_until, now) + SUPPLY_BUFF_DURATION_MS
+        message = "보급품 획득: 이동속도 증가"
+        color = (255, 240, 100)
+    elif reward_type == "shield":
+        global shield_until
+        shield_until = max(shield_until, now) + SUPPLY_BUFF_DURATION_MS
+        message = "보급품 획득: 보호막"
+        color = (100, 220, 255)
+    else:
+        available = [name for name in SKILL_BOOK if name not in owned_skills]
+        if not available:
+            my_player.Hp = min(my_player.MaxHp, my_player.Hp + SUPPLY_HEAL_AMOUNT)
+            message = "보급품 획득: 체력 회복"
+            color = (100, 255, 130)
+        else:
+            skill_name = random.choice(available)
+            add_skill_to_inventory(skill_name)
+            message = f"보급품 획득: {skill_name}"
+            color = SKILL_BOOK[skill_name].color
+    particles.emit(center_x, center_y, color, count=24, speed=80, lifetime=600, size=6)
+    return message
+
+
 skill_sounds = {
     "달팽이 세개": load_effect_sound("skill_bomb.wav"),
     "레이징 블로우": load_effect_sound("skill_attack.wav"),
     "헤이스트": load_effect_sound("skill_haste.wav"),
     "매의 눈": load_effect_sound("skill_vision.wav"),
     "보호막": load_effect_sound("skill_shield.wav"),
+    "은신": load_effect_sound("skill_stealth.wav"),
 }
 chest_sound = load_effect_sound("chest_open.wav")
 
@@ -158,7 +217,7 @@ chest_sound = load_effect_sound("chest_open.wav")
 vision_shapes = (VISION_CIRCLE, VISION_CONE, VISION_RECTANGLE, VISION_LINE)
 vision_shape_index = 0
 
-skill_window_open = False
+inventory_open = False
 weapon_state = WeaponState()
 vision_shape_override = None
 
@@ -182,12 +241,13 @@ def draw_ui_gauge(surface, x, y, current_val, max_val):
     pygame.draw.rect(surface, bg_color, inner_rect)
 
     # 2. 체력 비율에 따른 게이지 색상 결정 (인자 fill_color 대신 실시간 계산)
-    if current_val >= 100:
+    health_ratio = current_val / max(1, max_val)
+    if health_ratio >= HEALTH_GREEN_THRESHOLD:
         hp_color = pygame.Color("green")
-    elif current_val <= 60:
-        hp_color = pygame.Color("red")      # 체력이 60 이하로 떨어지면 노란색
-    elif current_val <= 80:
-        hp_color = pygame.Color("yellow")   # 체력이 81~99 사이면 노란색
+    elif health_ratio >= HEALTH_YELLOW_THRESHOLD:
+        hp_color = pygame.Color("yellow")
+    else:
+        hp_color = pygame.Color("red")
         
     # 3. 현재 체력만큼 게이지 채워 그리기
     fill_rect = inner_rect.copy()
@@ -268,7 +328,7 @@ def handle_quit(_event, _mouse_pos):
 
 
 def activate_quick_slot(key):
-    global system_message, vision_shape_override, vision_skill_until, shield_until, haste_until
+    global system_message, vision_shape_override, vision_skill_until, shield_until, haste_until, stealth_until, stealth_token
     key_name = pygame.key.name(key).upper()
     slot = next((slot for slot in quick_slots if slot.key_name == key_name), None)
     if not slot or not slot.assigned_skill:
@@ -282,11 +342,14 @@ def activate_quick_slot(key):
         system_message = f"{skill_name} 재사용 대기: {remain:.1f}초"
         return
 
-    skill_cooldowns[skill_name] = now + 5000
+    cooldown = STEALTH_COOLDOWN_MS if skill_name == "은신" else SKILL_COOLDOWN_MS
+    skill_cooldowns[skill_name] = now + cooldown
     play_effect_sound(skill_sounds.get(skill_name), skill_name)
     if skill_name == "달팽이 세개":
         target_x, target_y = screen_to_world(*pygame.mouse.get_pos(), CameraPosX, CameraPosY, camera_zoom)
-        active_bombs.append({"x": target_x, "y": target_y, "explode_at": now + 600})
+        active_bombs.append({"x": target_x, "y": target_y, "explode_at": now + BOMB_DELAY_MS})
+        particles.emit(target_x, target_y, (255, 190, 40), count=18, speed=55, lifetime=500, size=6)
+        particles.ring(target_x, target_y, (255, 220, 80), radius=35, lifetime=450)
         system_message = "폭탄을 설치했습니다."
     elif skill_name == "레이징 블로우":
         base_angle = math.atan2(
@@ -305,20 +368,53 @@ def activate_quick_slot(key):
         for spread in (-12, 0, 12):
             angle = base_angle + math.radians(spread)
             skill_bullet = Bullet(8, damage=SKILL_BOOK[skill_name].Power, owner_id=my_id)
-            skill_bullet.launch(center_x, center_y, center_x + math.cos(angle) * 1000,
-                                center_y + math.sin(angle) * 1000, speed=22)
+            skill_bullet.launch(
+                center_x,
+                center_y,
+                center_x + math.cos(angle) * BULLET_TARGET_DISTANCE,
+                center_y + math.sin(angle) * BULLET_TARGET_DISTANCE,
+                speed=22,
+            )
             bullets.append(skill_bullet)
         system_message = "레이징 블로우를 사용했습니다."
     elif skill_name == "헤이스트":
-        haste_until = now + 5000
+        haste_until = now + HASTE_DURATION_MS
+        particles.ring(
+            my_player.X + my_player.rect.width / 2,
+            my_player.Y + my_player.rect.height / 2,
+            (255, 240, 100), count=18, radius=65, lifetime=500, size=4,
+        )
         system_message = "5초 동안 달리기 속도가 증가합니다."
     elif skill_name == "매의 눈":
         vision_shape_override = VISION_CIRCLE
-        vision_skill_until = now + 3000
+        vision_skill_until = now + VISION_DURATION_MS
+        particles.ring(
+            my_player.X + my_player.rect.width / 2,
+            my_player.Y + my_player.rect.height / 2,
+            (120, 220, 255), count=24, radius=90, lifetime=650, size=4,
+        )
         system_message = "3초 동안 원형으로 넓게 봅니다."
     elif skill_name == "보호막":
-        shield_until = now + 5000
+        shield_until = now + SHIELD_DURATION_MS
+        particles.ring(
+            my_player.X + my_player.rect.width / 2,
+            my_player.Y + my_player.rect.height / 2,
+            (100, 220, 255), count=28, radius=55, lifetime=700, size=5,
+        )
         system_message = "5초 동안 피해를 받지 않습니다."
+    elif skill_name == "은신":
+        stealth_until = now + STEALTH_DURATION_MS
+        stealth_token += 1
+        particles.emit(
+            my_player.X + my_player.rect.width / 2,
+            my_player.Y + my_player.rect.height / 2,
+            (180, 190, 255),
+            count=24,
+            speed=70,
+            lifetime=650,
+            size=5,
+        )
+        system_message = "1.5초 동안 은신합니다."
 
 
 def select_weapon(weapon_id):
@@ -356,29 +452,29 @@ def activate_skill_or_reload(key):
 
 
 def handle_key_event(event, _mouse_pos):
-    global skill_window_open, dragging_skill
+    global inventory_open, dragging_skill
+    weapon_key_codes = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6)
+    weapon_id = dict(zip(weapon_key_codes, WEAPON_KEYS)).get(event.key)
+    if weapon_id:
+        select_weapon(weapon_id)
+        return
+
     key_actions = {
         pygame.K_ESCAPE: lambda _key: handle_quit(None, None),
-        pygame.K_k: lambda _key: toggle_skill_window(),
+        pygame.K_i: lambda _key: toggle_inventory(),
         pygame.K_v: lambda _key: cycle_vision_shape(),
         pygame.K_q: lambda _key: activate_quick_slot(_key),
         pygame.K_e: lambda _key: activate_quick_slot(_key),
         pygame.K_t: lambda _key: activate_quick_slot(_key),
         pygame.K_r: lambda _key: reload_weapon(),
         pygame.K_f: lambda _key: activate_skill_or_reload(_key),
-        pygame.K_1: lambda _key: select_weapon("pistol"),
-        pygame.K_2: lambda _key: select_weapon("rifle"),
-        pygame.K_3: lambda _key: select_weapon("shotgun"),
-        pygame.K_4: lambda _key: select_weapon("sniper"),
-        pygame.K_5: lambda _key: select_weapon("smg"),
-        pygame.K_6: lambda _key: select_weapon("knife"),
     }
     key_actions.get(event.key, activate_quick_slot)(event.key)
 
 
-def toggle_skill_window():
-    global skill_window_open, dragging_skill
-    skill_window_open = not skill_window_open
+def toggle_inventory():
+    global inventory_open, dragging_skill
+    inventory_open = not inventory_open
     dragging_skill = None
 
 
@@ -404,7 +500,7 @@ def fire_knife():
     )
     
     # 칼 공격 범위 (데미지를 줄 최대 거리)
-    knife_range = 150
+    knife_range = MELEE_RANGE
     
     # 근처 서버 플레이어 찾기
     attacked_count = 0
@@ -421,9 +517,10 @@ def fire_knife():
             attacked_count += 1
     
     weapon_state.consume_round()
-    screen_shake = min(8, screen_shake + 3)
+    screen_shake = min(SCREEN_SHAKE_MAX, screen_shake + MELEE_SHAKE)
     
     if attacked_count > 0:
+        particles.emit(center_x, center_y, (255, 80, 80), count=18, speed=100, lifetime=400, size=5)
         system_message = f"칼 공격! {config.damage} 데미지 × {attacked_count}명"
     else:
         system_message = f"칼 휘둘렀습니다. (데미지: {config.damage})"
@@ -472,7 +569,8 @@ def fire_bullet():
     muzzle_x = center_x + math.cos(base_angle) * 40
     muzzle_y = center_y + math.sin(base_angle) * 40
     weapon_state.consume_round()
-    screen_shake = min(12, screen_shake + int(config.recoil * 2))
+    screen_shake = min(SCREEN_SHAKE_MAX, screen_shake + int(config.recoil * 2))
+    particles.emit(muzzle_x, muzzle_y, (255, 220, 100), count=10, speed=70, lifetime=220, size=4)
 
     for _ in range(config.pellets):
         shot_angle = base_angle + math.radians(random.uniform(-config.spread_degrees, config.spread_degrees))
@@ -485,8 +583,8 @@ def fire_bullet():
         new_bullet.launch(
             muzzle_x,
             muzzle_y,
-            muzzle_x + math.cos(shot_angle) * 1000,
-            muzzle_y + math.sin(shot_angle) * 1000,
+            muzzle_x + math.cos(shot_angle) * BULLET_TARGET_DISTANCE,
+            muzzle_y + math.sin(shot_angle) * BULLET_TARGET_DISTANCE,
             speed=config.bullet_speed,
         )
         new_bullet.just_fired = True
@@ -503,9 +601,13 @@ def handle_mouse_down(event, mouse_pos):
     if event.button != 1:
         return
 
-    available_items = skill_window if skill_window_open else ()
+    available_items = inventory_items if inventory_open else ()
     dragging_skill = next(
-        (item.skill_name for item in available_items if item.rect.collidepoint(mouse_pos)),
+        (
+            item.skill_name
+            for item in available_items
+            if item.is_owned and item.rect.collidepoint(mouse_pos)
+        ),
         None,
     )
     if dragging_skill is None:
@@ -554,8 +656,8 @@ def GameView():
     global running, ScreenState, CameraPosX, CameraPosY, Weapon_Angle, Weapon_Pos, camera_fov, camera_zoom
     global screen_shake, server_players, bullets, remote_bullets, processed_bullet_events, MousePos, system_message
     global vision_shape_override, vision_skill_until, shield_until, haste_until
-    global active_bombs, active_explosions, pending_treasure_destroys
-    global visibility_polygon_cache, mouse_fire_hold
+    global active_bombs, active_explosions, supply_drops, next_supply_drop_at, pending_treasure_destroys
+    global visibility_polygon_cache, mouse_fire_hold, last_effect_tick
 
     MousePos = pygame.mouse.get_pos()
     if my_player.Hp <= 0:
@@ -571,21 +673,62 @@ def GameView():
     weapon_state.update_reload()
 
     now = pygame.time.get_ticks()
+    effect_delta = max(0, now - last_effect_tick)
+    last_effect_tick = now
+    particles.update(effect_delta)
+    if my_player.is_dashing:
+        particles.emit(
+            my_player.X + my_player.rect.width / 2,
+            my_player.Y + my_player.rect.height / 2,
+            (255, 255, 180), count=2, speed=35, lifetime=180, size=4,
+        )
     if vision_skill_until and now >= vision_skill_until:
         vision_skill_until = 0
         vision_shape_override = None
-    my_player.normal_speed = 10 if now < haste_until else 5
+    my_player.normal_speed = PLAYER_HASTE_SPEED if now < haste_until else PLAYER_NORMAL_SPEED
+
+    if now >= next_supply_drop_at:
+        if len(supply_drops) < SUPPLY_DROP_MAX and random.random() < SUPPLY_DROP_CHANCE:
+            spawn_supply_drop(now)
+        next_supply_drop_at = now + SUPPLY_DROP_INTERVAL_MS
+
+    player_rect = my_player.rect
+    remaining_supply_drops = []
+    for supply in supply_drops:
+        supply_rect = pygame.Rect(
+            round(supply["x"] - SUPPLY_DROP_RADIUS),
+            round(supply["y"] - SUPPLY_DROP_RADIUS),
+            SUPPLY_DROP_RADIUS * 2,
+            SUPPLY_DROP_RADIUS * 2,
+        )
+        if now >= supply["expires_at"]:
+            continue
+        if player_rect.colliderect(supply_rect):
+            # 아이템을 획득한 순간 목록에서 제거해 한 번만 보상합니다.
+            system_message = apply_supply_reward(supply["type"])
+            continue
+        remaining_supply_drops.append(supply)
+    supply_drops = remaining_supply_drops
 
     pending_bombs = []
     for bomb in active_bombs:
         if now < bomb["explode_at"]:
             pending_bombs.append(bomb)
             continue
-        active_explosions.append({"x": bomb["x"], "y": bomb["y"], "until": now + 350})
+        active_explosions.append({"x": bomb["x"], "y": bomb["y"], "until": now + EXPLOSION_DURATION_MS})
+        particles.emit(
+            bomb["x"], bomb["y"], (255, 100, 30),
+            count=45, speed=180, lifetime=700, size=8, gravity=90,
+        )
+        particles.ring(
+            bomb["x"], bomb["y"], (255, 220, 80),
+            count=24, radius=BOMB_RADIUS, lifetime=500, size=6,
+        )
+        screen_shake = min(SCREEN_SHAKE_MAX, screen_shake + 8)
         for p_id, p_info in server_players.items():
             distance = math.hypot(p_info["posX"] - bomb["x"], p_info["posY"] - bomb["y"])
-            if distance <= 120:
-                p_info["hp"] = max(0, p_info.get("hp", 100) - 30)
+            if distance <= BOMB_RADIUS:
+                p_info["hp"] = max(0, p_info.get("hp", PLAYER_MAX_HP) - BOMB_DAMAGE)
     active_bombs = pending_bombs
     active_explosions = [explosion for explosion in active_explosions if now < explosion["until"]]
 
@@ -597,6 +740,8 @@ def GameView():
     send_data["weapon_id"] = weapon_state.weapon_id
     send_data["magazine_ammo"] = weapon_state.magazine_ammo
     send_data["reserve_ammo"] = weapon_state.reserve_ammo
+    send_data["stealth"] = now < stealth_until
+    send_data["stealth_token"] = stealth_token
     send_data["destroyed_treasures"] = list(pending_treasure_destroys)
     
     # ★ [정리] 총알 정보 - 이번 프레임에서 새로 발사된 총알만 전송
@@ -617,7 +762,7 @@ def GameView():
 
     try:
         client.send(pickle.dumps(send_data))
-        server_raw = client.recv(4096)
+        server_raw = client.recv(NETWORK_BUFFER_SIZE)
         if server_raw:
             server_players = pickle.loads(server_raw)
             synchronized_treasures = set()
@@ -714,14 +859,26 @@ def GameView():
                 continue
             destroyed_treasure = TileGene.destroy_treasure_at(bullet.rect)
             if destroyed_treasure:
+                # 보물상자 타일은 먼저 제거하고, 이 클라이언트에게 보상을 지급합니다.
+                # destroyed_treasures 동기화는 다른 클라이언트의 맵에서도 상자를 제거합니다.
                 pending_treasure_destroys.append(destroyed_treasure)
                 play_effect_sound(chest_sound, "chest_open.wav")
-                empty_slot = next((slot for slot in quick_slots if slot.assigned_skill is None), None)
-                if empty_slot:
-                    empty_slot.assigned_skill = random.choice(list(SKILL_BOOK))
-                    system_message = f"보물상자에서 [{empty_slot.assigned_skill}] 획득!"
+                chest_roll = random.random()
+                if chest_roll < CHEST_HEAL_CHANCE:
+                    my_player.Hp = min(my_player.MaxHp, my_player.Hp + SUPPLY_HEAL_AMOUNT)
+                    system_message = f"보물상자: 체력 +{SUPPLY_HEAL_AMOUNT}"
+                elif chest_roll < CHEST_HEAL_CHANCE + CHEST_BUFF_CHANCE:
+                    haste_until = max(haste_until, pygame.time.get_ticks()) + SUPPLY_BUFF_DURATION_MS
+                    system_message = "보물상자: 이동속도 증가"
                 else:
-                    system_message = "보물상자를 열었지만 스킬 슬롯이 가득 찼습니다."
+                    available = [name for name in SKILL_BOOK if name not in owned_skills]
+                    if available:
+                        obtained_skill = random.choice(available)
+                        add_skill_to_inventory(obtained_skill)
+                        system_message = f"보물상자: [{obtained_skill}] 인벤토리에 저장"
+                    else:
+                        my_player.Hp = min(my_player.MaxHp, my_player.Hp + SUPPLY_HEAL_AMOUNT)
+                        system_message = f"보물상자: 체력 +{SUPPLY_HEAL_AMOUNT}"
                 bullet.is_active = False
                 continue
             for p_id, p_info in server_players.items():
@@ -732,6 +889,10 @@ def GameView():
                 )
                 if head.colliderect(bullet.rect) or body.colliderect(bullet.rect):
                     bullet.is_active = False
+                    particles.emit(
+                        bullet.x, bullet.y, (255, 70, 70),
+                        count=12, speed=65, lifetime=350, size=4,
+                    )
                     break
     bullets = [b for b in bullets if b.is_active]
 
@@ -745,8 +906,8 @@ def GameView():
             processed_bullet_events.add(event_id)
             if bullet_info.get("owner_id") == my_id:
                 continue
-            weapon_id = bullet_info.get("weapon_id", "pistol")
-            config = WEAPONS.get(weapon_id, WEAPONS["pistol"])
+            weapon_id = bullet_info.get("weapon_id", DEFAULT_WEAPON_ID)
+            config = WEAPONS.get(weapon_id, WEAPONS[DEFAULT_WEAPON_ID])
             enemy_bullet = Bullet(
                 config.bullet_size,
                 damage=config.damage,
@@ -756,8 +917,8 @@ def GameView():
             angle = math.radians(bullet_info.get("angle", 0.0))
             enemy_bullet.launch(
                 bullet_info["x"], bullet_info["y"],
-                bullet_info["x"] + math.cos(angle) * 1000,
-                bullet_info["y"] + math.sin(angle) * 1000,
+                bullet_info["x"] + math.cos(angle) * BULLET_TARGET_DISTANCE,
+                bullet_info["y"] + math.sin(angle) * BULLET_TARGET_DISTANCE,
                 speed=config.bullet_speed,
             )
             remote_bullets.append(enemy_bullet)
@@ -778,6 +939,8 @@ def GameView():
     # 다른 플레이어 그리기
     for p_id, p_info in server_players.items():
         if int(p_id) == my_id:
+            continue
+        if p_info.get("stealth", False):
             continue
 
         other_world_x, other_world_y = get_player_world_center(p_info["posX"], p_info["posY"], IML.Player.get_width(), IML.Player.get_height())
@@ -800,8 +963,17 @@ def GameView():
         display.blit(other_rotated_gun, other_gun_rect)
 
     # 내 캐릭터 및 무기 그리기
-    my_player.draw(display, CameraPosX, CameraPosY, camera_zoom)
-    display.blit(rotated_shotgun, Shotgun_rect)
+    if now < stealth_until:
+        stealth_image = my_player.image.copy()
+        stealth_image.set_alpha(75)
+        display.blit(
+            stealth_image,
+            ((my_player.rect.x - CameraPosX) * camera_zoom,
+             (my_player.rect.y - CameraPosY) * camera_zoom),
+        )
+    else:
+        my_player.draw(display, CameraPosX, CameraPosY, camera_zoom)
+        display.blit(rotated_shotgun, Shotgun_rect)
 
 
 
@@ -809,7 +981,7 @@ def GameView():
     # 화면 전체를 어둡게 한 뒤, 아래에서 시야 폴리곤만 투명하게 뚫습니다.
     dark_overlay = vision_overlay
     # 완전한 검정이 아니라 뒤의 맵이 살짝 보이는 반투명 검정입니다.
-    dark_overlay.fill((0, 0, 0, 170))
+    dark_overlay.fill((0, 0, 0, VISION_OVERLAY_ALPHA))
 
     # 맵 바깥은 월드 타일이 없으므로 항상 검게 처리합니다.
     map_screen_left = -CameraPosX * camera_zoom
@@ -861,6 +1033,31 @@ def GameView():
         bullet.draw(display, CameraPosX, CameraPosY, camera_zoom, force_visible=True)
 
     # 폭탄과 폭발 범위는 시야 효과 위에 표시합니다.
+    supply_colors = {
+        "heal": (100, 255, 130),
+        "haste": (255, 240, 100),
+        "shield": (100, 220, 255),
+        "skill": (210, 150, 255),
+    }
+    for supply in supply_drops:
+        supply_screen = world_to_screen(
+            supply["x"], supply["y"], CameraPosX, CameraPosY, camera_zoom
+        )
+        color = supply_colors[supply["type"]]
+        pygame.draw.circle(
+            display,
+            color,
+            (round(supply_screen[0]), round(supply_screen[1])),
+            max(8, round(SUPPLY_DROP_RADIUS * camera_zoom)),
+        )
+        pygame.draw.circle(
+            display,
+            (255, 255, 255),
+            (round(supply_screen[0]), round(supply_screen[1])),
+            max(10, round((SUPPLY_DROP_RADIUS + 5) * camera_zoom)),
+            2,
+        )
+
     for bomb in active_bombs:
         bomb_screen = world_to_screen(bomb["x"], bomb["y"], CameraPosX, CameraPosY, camera_zoom)
         pygame.draw.circle(display, (255, 170, 40), (round(bomb_screen[0]), round(bomb_screen[1])),
@@ -877,6 +1074,8 @@ def GameView():
             5,
         )
 
+    particles.draw(display, CameraPosX, CameraPosY, camera_zoom)
+
     if shield_until > pygame.time.get_ticks():
         shield_center = get_player_screen_center(
             my_player.X, my_player.Y, IML.Player.get_width(), IML.Player.get_height(),
@@ -886,7 +1085,7 @@ def GameView():
         if IML.Protect:
             protect_size = max(50, int(90 * camera_zoom))
             protect_scaled = pygame.transform.scale(IML.Protect, (protect_size, protect_size))
-            protect_scaled.set_alpha(150)  # 150/255 = 약 60% 투명도
+            protect_scaled.set_alpha(SHIELD_ALPHA)
             protect_rect = protect_scaled.get_rect(center=shield_center)
             display.blit(protect_scaled, protect_rect)
         else:
@@ -912,11 +1111,7 @@ def GameView():
     
     # --- [퀵슬롯 배경과 스킬 소스창] ---
     draw_skill_panel(display)
-    hovered_skill = draw_skill_window(display, MousePos, skill_window_open, dragging_skill)
-    
-    # 스킬 도감 (스킬창 닫혀있을 때는 안 보임 - draw_skill_window에서 처리)
-    # for item in skill_window:
-    #     item.draw(display)
+    hovered_skill = draw_skill_inventory(display, MousePos, inventory_open, dragging_skill)
 
     # 하단 퀵슬롯 (�익슬롯은 항상 보임)
     for slot in quick_slots:
@@ -927,7 +1122,7 @@ def GameView():
     draw_ammo_status(display)
     
     # ★ [추가] 스킬 툴팁 그리기 (마우스 raycast 무시 - 드래그 중이 아닐 때만)
-    if skill_window_open and hovered_skill and dragging_skill is None:
+    if hovered_skill and dragging_skill is None:
         draw_skill_tooltip(display, MousePos, hovered_skill)
 
     # 시스템 메시지
@@ -937,10 +1132,9 @@ def GameView():
         display.blit(message_text, (30, ScreenY - 40))
     
     # 스킬 창 상태 표시 (우측 상단)
-    skill_status = "📖 스킬 창: [OPEN - K]" if skill_window_open else "📖 스킬 창: [닫음 - K]"
-    # [커스텀 가능] 스킬 상태 폰트 (GuiFont 사용)
-    status_text = GuiFont.render(skill_status, True, (100, 200, 255) if skill_window_open else (100, 100, 100))
-    display.blit(status_text, (ScreenX - 300, 20))
+    inventory_status = "🎒 인벤토리: [I]"
+    inventory_text = GuiFont.render(inventory_status, True, (170, 220, 180))
+    display.blit(inventory_text, (ScreenX - 300, 20))
     vision_status = f"시야: {current_vision_shape} [V]"
     # [커스텀 가능] 시야 정보 폰트 (GuiFont 사용)
     vision_text = GuiFont.render(vision_status, True, (255, 220, 120))
@@ -960,6 +1154,6 @@ while running:
     elif ScreenState == "GameOver":
         GameOverView()
     pygame.display.update() 
-    clock.tick(fps)
+    clock.tick(FPS)
 
 pygame.quit()

@@ -2,13 +2,25 @@ import pygame
 import math
 import os
 import time
+from Config import (
+    BULLET_IMAGE_FILE,
+    DEFAULT_BULLET_DAMAGE,
+    DEFAULT_BULLET_SIZE,
+    DEFAULT_WEAPON_ID,
+)
 
 class Bullet:
-    def __init__(self, size=1, damage=10, owner_id=None, weapon_id="pistol"):
+    def __init__(
+        self,
+        size=DEFAULT_BULLET_SIZE,
+        damage=DEFAULT_BULLET_DAMAGE,
+        owner_id=None,
+        weapon_id=DEFAULT_WEAPON_ID,
+    ):
         image_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "Image",
-            "sprite_0017.png",
+            BULLET_IMAGE_FILE,
         )
         bullet_image = pygame.image.load(image_path).convert_alpha()
         image_width = max(8, size * 4)

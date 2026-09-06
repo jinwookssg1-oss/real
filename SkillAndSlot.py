@@ -1,4 +1,20 @@
 import pygame
+from Config import (
+    QUICK_SLOT_SIZE,
+    QUICK_SLOT_START_X,
+    QUICK_SLOT_Y,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SKILL_ICON_SIZE,
+    INVENTORY_ITEM_COLUMNS,
+    INVENTORY_SIZE,
+    INVENTORY_X,
+    INVENTORY_Y,
+    INVENTORY_ITEM_ALPHA,
+    SKILL_PANEL_SIZE,
+    SKILL_PANEL_X,
+    SKILL_PANEL_Y,
+)
 
 # 글로벌 이미지 로더
 image_loader = None
@@ -10,7 +26,6 @@ def set_image_loader(loader):
 
 
 FONT = None
-SKILL_WINDOW_IMAGE = None
 QUICK_SLOT_IMAGE = None
 SKILL_SLOT_IMAGE = None
 SKILL_PANEL_IMAGE = None
@@ -31,11 +46,10 @@ def get_font():
 
 
 def set_ui_assets(skill_window_image, quick_slot_image):
-    global SKILL_WINDOW_IMAGE, QUICK_SLOT_IMAGE, SKILL_SLOT_IMAGE, SKILL_PANEL_IMAGE
-    SKILL_WINDOW_IMAGE = pygame.transform.smoothscale(skill_window_image, (720, 320))
-    SKILL_PANEL_IMAGE = pygame.transform.smoothscale(skill_window_image, (720, 180))
-    QUICK_SLOT_IMAGE = pygame.transform.smoothscale(quick_slot_image, (80, 80))
-    SKILL_SLOT_IMAGE = pygame.transform.smoothscale(quick_slot_image, (70, 70))
+    global QUICK_SLOT_IMAGE, SKILL_SLOT_IMAGE, SKILL_PANEL_IMAGE
+    SKILL_PANEL_IMAGE = pygame.transform.smoothscale(skill_window_image, SKILL_PANEL_SIZE)
+    QUICK_SLOT_IMAGE = pygame.transform.smoothscale(quick_slot_image, (QUICK_SLOT_SIZE, QUICK_SLOT_SIZE))
+    SKILL_SLOT_IMAGE = pygame.transform.smoothscale(quick_slot_image, (SKILL_ICON_SIZE, SKILL_ICON_SIZE))
 
 
 class Skill:
@@ -59,13 +73,18 @@ SKILL_BOOK = {
     "헤이스트": Skill("헤이스트", YELLOW, "이동속도와 점프력이 상승합니다!", 0, "5초간 이동속도 2배 증가"),
     "매의 눈": Skill("매의 눈", (120, 220, 255), "시야가 넓어집니다!", 0, "3초간 원형 시야"),
     "보호막": Skill("보호막", (100, 255, 180), "보호막이 생겼습니다!", 0, "5초간 피해 무효화"),
+    "은신": Skill("은신", (190, 190, 220), "몸을 숨겼습니다!", 0, "1.5초간 다른 플레이어에게 보이지 않음"),
 }
+
+# 현재 보유 중인 스킬입니다. 도감(SKILL_BOOK)과 달리 실제 획득 목록만 표시합니다.
+owned_skills = set()
 
 
 class SkillWindowItem:
-    def __init__(self, x, y, skill_name):
-        self.rect = pygame.Rect(x, y, 70, 70)
+    def __init__(self, x, y, skill_name, is_owned=False):
+        self.rect = pygame.Rect(x, y, SKILL_ICON_SIZE, SKILL_ICON_SIZE)
         self.skill_name = skill_name
+        self.is_owned = is_owned
         self.is_hovering = False
 
     def update(self, mouse_pos):
@@ -74,35 +93,40 @@ class SkillWindowItem:
     def draw(self, surface):
         global image_loader
         skill = SKILL_BOOK[self.skill_name]
-        border_color = (255, 255, 0) if self.is_hovering else BLACK
+        border_color = (255, 255, 0) if self.is_hovering and self.is_owned else BLACK
         border_width = 3 if self.is_hovering else 2
+        icon_surface = pygame.Surface(self.rect.size, pygame.SRCALPHA)
         
         # 스킬 아이콘 이미지가 있으면 표시, 없으면 색상 박스 표시
         if SKILL_SLOT_IMAGE:
-            surface.blit(SKILL_SLOT_IMAGE, self.rect)
+            icon_surface.blit(SKILL_SLOT_IMAGE, (0, 0))
         else:
-            pygame.draw.rect(surface, skill.color, self.rect, border_radius=5)
+            pygame.draw.rect(icon_surface, skill.color, icon_surface.get_rect(), border_radius=5)
         
         # 스킬 아이콘 이미지 표시
         if image_loader:
             skill_icon = image_loader.GetSkillIcon(self.skill_name)
             if skill_icon:
-                surface.blit(skill_icon, self.rect)
+                icon_surface.blit(skill_icon, (0, 0))
             else:
-                pygame.draw.rect(surface, skill.color, self.rect.inflate(-12, -12), border_radius=4)
+                pygame.draw.rect(icon_surface, skill.color, icon_surface.get_rect().inflate(-12, -12), border_radius=4)
                 text = get_font().render(skill.name[:2], True, BLACK)
-                surface.blit(text, text.get_rect(center=self.rect.center))
+                icon_surface.blit(text, text.get_rect(center=icon_surface.get_rect().center))
         else:
-            pygame.draw.rect(surface, skill.color, self.rect.inflate(-12, -12), border_radius=4)
+            pygame.draw.rect(icon_surface, skill.color, icon_surface.get_rect().inflate(-12, -12), border_radius=4)
             text = get_font().render(skill.name[:2], True, BLACK)
-            surface.blit(text, text.get_rect(center=self.rect.center))
+            icon_surface.blit(text, text.get_rect(center=icon_surface.get_rect().center))
+
+        if not self.is_owned:
+            icon_surface.set_alpha(INVENTORY_ITEM_ALPHA)
+        surface.blit(icon_surface, self.rect)
         
         pygame.draw.rect(surface, border_color, self.rect, border_width, border_radius=5)
 
 
 class QuickSlot:
     def __init__(self, x, y, key_name):
-        self.rect = pygame.Rect(x, y, 80, 80)
+        self.rect = pygame.Rect(x, y, QUICK_SLOT_SIZE, QUICK_SLOT_SIZE)
         self.key_name = key_name
         self.assigned_skill = None
         self.is_hovering = False
@@ -149,29 +173,49 @@ class QuickSlot:
         surface.blit(key_text, (self.rect.x + 8, self.rect.y + 5))
 
 
-skill_window = [
-    SkillWindowItem(630, 150, "달팽이 세개"),
-    SkillWindowItem(860, 150, "레이징 블로우"),
-    SkillWindowItem(1090, 150, "헤이스트"),
-    SkillWindowItem(630, 240, "매의 눈"),
-    SkillWindowItem(860, 240, "보호막"),
-]
+def add_skill_to_inventory(skill_name):
+    """새 스킬을 중복 없이 인벤토리에 추가하고 추가 여부를 반환합니다."""
+    if skill_name not in SKILL_BOOK or skill_name in owned_skills:
+        return False
+    owned_skills.add(skill_name)
+    refresh_skill_inventory()
+    return True
+
+
+def refresh_skill_inventory():
+    # 보유 여부가 바뀔 때마다 같은 순서로 다시 만들어야
+    # 미획득 아이콘의 투명도와 드래그 가능 상태가 즉시 갱신됩니다.
+    inventory_items.clear()
+    item_gap = 18
+    item_width = SKILL_ICON_SIZE + item_gap
+    start_x = INVENTORY_X + 28
+    start_y = INVENTORY_Y + 62
+    for index, skill_name in enumerate(SKILL_BOOK):
+        row, column = divmod(index, INVENTORY_ITEM_COLUMNS)
+        inventory_items.append(
+            SkillWindowItem(
+                start_x + column * item_width,
+                start_y + row * (SKILL_ICON_SIZE + 20),
+                skill_name,
+                skill_name in owned_skills,
+            )
+        )
+
+
+inventory_items = []
+refresh_skill_inventory()
 quick_slots = [
-    QuickSlot(880, 920, "Q"),
-    QuickSlot(980, 920, "E"),
-    QuickSlot(1080, 920, "T"),
+    QuickSlot(QUICK_SLOT_START_X + index * (QUICK_SLOT_SIZE + 20), QUICK_SLOT_Y, key_name)
+    for index, key_name in enumerate(("Q", "E", "T"))
 ]
 
 dragging_skill = None
 drag_offset_x = 0
 drag_offset_y = 0
 mouse_pos = (0, 0)
-system_message = "K를 눌러 스킬 창을 열고, 스킬을 드래그해서 하단 슬롯에 장착하세요!"
+system_message = "I를 눌러 인벤토리를 열고, 보유 스킬을 드래그해서 장착하세요!"
 
-SKILL_PANEL_RECT = pygame.Rect(600, 870, 720, 180)
-SKILL_SOURCE_RECT = pygame.Rect(600, 30, 720, 320)
-
-
+SKILL_PANEL_RECT = pygame.Rect(SKILL_PANEL_X, SKILL_PANEL_Y, *SKILL_PANEL_SIZE)
 def draw_skill_panel(surface):
     if SKILL_PANEL_IMAGE:
         surface.blit(SKILL_PANEL_IMAGE, SKILL_PANEL_RECT)
@@ -179,37 +223,54 @@ def draw_skill_panel(surface):
         pygame.draw.rect(surface, (30, 30, 50), SKILL_PANEL_RECT, border_radius=10)
 
 
-def draw_skill_window(surface, mouse_pos, is_window_open, dragging_skill):
-    if not is_window_open:
+def draw_skill_inventory(surface, mouse_pos, is_open, dragging_skill):
+    # 인벤토리는 I 키로 열었을 때만 화면과 입력을 활성화합니다.
+    if not is_open:
         return None
-
-    if SKILL_WINDOW_IMAGE:
-        surface.blit(SKILL_WINDOW_IMAGE, SKILL_SOURCE_RECT)
-    else:
-        pygame.draw.rect(surface, (30, 30, 50), SKILL_SOURCE_RECT, border_radius=10)
-    title = pygame.font.SysFont("malgungothic", 16).render("스킬 도감", True, (100, 200, 255))
-    surface.blit(title, (SKILL_SOURCE_RECT.x + 15, SKILL_SOURCE_RECT.y + 10))
+    inventory_rect = pygame.Rect(INVENTORY_X, INVENTORY_Y, *INVENTORY_SIZE)
+    pygame.draw.rect(surface, (18, 22, 42), inventory_rect, border_radius=12)
+    pygame.draw.rect(surface, (110, 180, 255), inventory_rect, 2, border_radius=12)
+    title = get_font().render(
+        f"스킬 인벤토리  {len(owned_skills)}/{len(SKILL_BOOK)}",
+        True,
+        (180, 225, 255),
+    )
+    surface.blit(title, (inventory_rect.x + 20, inventory_rect.y + 18))
 
     hovered_skill = None
-    for item in skill_window:
+    for item in inventory_items:
         item.update(mouse_pos)
         item.draw(surface)
-        if item.is_hovering:
+        if item.is_hovering and item.is_owned:
             hovered_skill = item.skill_name
 
-    if dragging_skill:
-        skill = SKILL_BOOK[dragging_skill]
-        drag_rect = pygame.Rect(mouse_pos[0] - 35, mouse_pos[1] - 35, 70, 70)
-        drag_surface = pygame.Surface((70, 70), pygame.SRCALPHA)
-        pygame.draw.rect(drag_surface, (*skill.color, 200), drag_surface.get_rect(), border_radius=5)
-        pygame.draw.rect(drag_surface, (255, 200, 0), drag_surface.get_rect(), 2, border_radius=5)
-        surface.blit(drag_surface, drag_rect)
-        text = get_font().render(skill.name[:2], True, BLACK)
-        surface.blit(text, text.get_rect(center=drag_rect.center))
+    draw_drag_preview(surface, mouse_pos, dragging_skill)
 
-    guide = pygame.font.SysFont("malgungothic", 11).render("드래그해서 장착!", True, (150, 150, 200))
-    surface.blit(guide, (SKILL_SOURCE_RECT.x + 20, SKILL_SOURCE_RECT.bottom - 25))
     return hovered_skill
+
+
+def draw_drag_preview(surface, mouse_pos, skill_name):
+    """마우스를 따라다니는 실제 스킬 아이콘 미리보기입니다."""
+    if not skill_name:
+        return
+
+    skill = SKILL_BOOK[skill_name]
+    preview = pygame.Surface((SKILL_ICON_SIZE, SKILL_ICON_SIZE), pygame.SRCALPHA)
+
+    # 보유 스킬의 원본 아이콘을 사용해 드래그 중에도 어떤 스킬인지 보이게 합니다.
+    skill_icon = image_loader.GetSkillIcon(skill_name) if image_loader else None
+    if skill_icon:
+        preview.blit(skill_icon, (0, 0))
+    else:
+        pygame.draw.rect(preview, skill.color, preview.get_rect(), border_radius=5)
+        text = get_font().render(skill.name[:2], True, BLACK)
+        preview.blit(text, text.get_rect(center=preview.get_rect().center))
+
+    # 반투명 테두리는 드래그 중인 아이콘이 슬롯에 놓일 수 있음을 표시합니다.
+    preview.set_alpha(220)
+    pygame.draw.rect(preview, (255, 220, 100), preview.get_rect(), 3, border_radius=6)
+    preview_rect = preview.get_rect(center=mouse_pos)
+    surface.blit(preview, preview_rect)
 
 
 def draw_skill_tooltip(surface, mouse_pos, skill_name):
@@ -222,8 +283,8 @@ def draw_skill_tooltip(surface, mouse_pos, skill_name):
     padding = 10
     width = max(text.get_width() for text in rendered) + padding * 2
     height = sum(text.get_height() for text in rendered) + padding * 2 + 5
-    x = min(mouse_pos[0] + 20, 1920 - width - 10)
-    y = min(mouse_pos[1] - 10, 1080 - height - 10)
+    x = min(mouse_pos[0] + 20, SCREEN_WIDTH - width - 10)
+    y = min(mouse_pos[1] - 10, SCREEN_HEIGHT - height - 10)
     rect = pygame.Rect(x, y, width, height)
     pygame.draw.rect(surface, (20, 20, 40), rect, border_radius=5)
     pygame.draw.rect(surface, skill.color, rect, 2, border_radius=5)

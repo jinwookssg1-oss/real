@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import time
+from Config import DEFAULT_WEAPON_ID
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ WEAPON_KEYS = ("pistol", "rifle", "shotgun", "sniper", "smg", "knife")
 
 
 class WeaponState:
-    def __init__(self, weapon_id="pistol"):
+    def __init__(self, weapon_id=DEFAULT_WEAPON_ID):
         self.weapon_id = weapon_id
         self.magazine_ammo = WEAPONS[weapon_id].magazine_size
         self.reserve_ammo = WEAPONS[weapon_id].reserve_ammo

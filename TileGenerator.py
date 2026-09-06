@@ -1,6 +1,15 @@
 import pygame
 import random
 import math
+from Config import (
+    MAP_HOUSE_COUNT,
+    MAP_HOUSE_PADDING,
+    MAP_HOUSE_MAX_SIZE,
+    MAP_HOUSE_MIN_SIZE,
+    MAP_SAFE_ZONE_MAX,
+    MAP_SAFE_ZONE_MIN,
+    MAP_TREASURE_CHANCE,
+)
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 from ImageLoad import Imageload
@@ -120,19 +129,35 @@ class TileGenerator:
         # 3. 맵 중간중간 무작위 위치에 '집' 형태 구조물 빌드
         # ★ [개선] 집의 윤곽선만 벽으로 생성 (내부는 비워 플레이어가 드나들 수 있음)
         # ★ [추가] 문과 보물상자 추가
-        num_houses = 48  # [커스텀 가능] 집 개수
-        for _ in range(num_houses):
-            # 맵 중앙 안쪽 안전한 좌표 무작위 선택 (시드가 같으므로 결과값도 모든 유저가 완벽히 일치)
-            house_x = random.randint(12, width_tiles - 32)
-            house_y = random.randint(12, height_tiles - 32)
-            
-            # 생성할 집의 크기 설정 (가로 12~20칸, 세로 12~20칸 크기)
-            house_w = random.randint(12, 20)  # [커스텀 가능] 집 최소/최대 너비
-            house_h = random.randint(12, 20)  # [커스텀 가능] 집 최소/최대 높이
-            
-            # 플레이어 시작 지점 광장 근처(예: 타일 인덱스 20~27 사이)에는 집이 안 생기도록 처리
-            if 72 <= house_x <= 112 and 72 <= house_y <= 112:
+        num_houses = MAP_HOUSE_COUNT
+        house_rects = []
+        attempts = 0
+        while len(house_rects) < num_houses and attempts < num_houses * 10:
+            attempts += 1
+            # 맵 중앙 안쪽 안전한 좌표를 선택합니다.
+            house_w = random.randint(MAP_HOUSE_MIN_SIZE, MAP_HOUSE_MAX_SIZE)
+            house_h = random.randint(MAP_HOUSE_MIN_SIZE, MAP_HOUSE_MAX_SIZE)
+            house_x = random.randint(12, max(12, width_tiles - house_w - 12))
+            house_y = random.randint(12, max(12, height_tiles - house_h - 12))
+
+            candidate = pygame.Rect(
+                house_x - MAP_HOUSE_PADDING,
+                house_y - MAP_HOUSE_PADDING,
+                house_w + MAP_HOUSE_PADDING * 2,
+                house_h + MAP_HOUSE_PADDING * 2,
+            )
+            safe_zone = pygame.Rect(
+                MAP_SAFE_ZONE_MIN,
+                MAP_SAFE_ZONE_MIN,
+                MAP_SAFE_ZONE_MAX - MAP_SAFE_ZONE_MIN,
+                MAP_SAFE_ZONE_MAX - MAP_SAFE_ZONE_MIN,
+            )
+            if candidate.colliderect(safe_zone) or any(
+                candidate.colliderect(existing) for existing in house_rects
+            ):
                 continue
+
+            house_rects.append(candidate)
             
             # 집의 윤곽선만 벽으로 생성 (테두리만 1, 내부는 바닥 0)
             for hy in range(house_y, house_y + house_h):
@@ -161,8 +186,9 @@ class TileGenerator:
             for door_pos in door_positions:
                 self.map_data[door_pos] = Tile(tile_type=2, is_walkable=True)  # 문은 통과 가능
             
-            # ★ [추가] 집에 확률적으로 보물상자 배치 (40% 확률)
-            if random.random() < 0.4 and house_w > 2 and house_h > 2:
+            # 집마다 설정된 확률로 보물상자를 하나 배치합니다.
+            # 확률은 Config.py의 MAP_TREASURE_CHANCE에서 조정합니다.
+            if random.random() < MAP_TREASURE_CHANCE and house_w > 2 and house_h > 2:
                 treasure_x = random.randint(house_x + 1, house_x + house_w - 2)
                 treasure_y = random.randint(house_y + 1, house_y + house_h - 2)
                 self.map_data[(treasure_x, treasure_y)] = Tile(tile_type=3, is_walkable=True)  # 보물상자

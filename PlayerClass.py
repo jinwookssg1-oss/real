@@ -9,20 +9,21 @@ class Player:
         self.Y = y
         self.size = size
        
-        self.Hp = 100
-        self.MaxHp = 100
+        self.Hp = PLAYER_MAX_HP
+        self.MaxHp = PLAYER_MAX_HP
         self.rect = self.image.get_rect(topleft=(x, y))
 
         self.tile_generator = tile_Gene
 
-        self.normal_speed = 5
-        self.dash_speed = 15      # 대쉬 중일 때의 속도
+        self.normal_speed = PLAYER_NORMAL_SPEED
+        self.sprint_speed = PLAYER_SPRINT_SPEED
+        self.dash_speed = PLAYER_DASH_SPEED
         
         # --- 대쉬 관련 변수 세팅 ---
-        self.dash_duration = 200   # 대쉬 지속 시간: 0.2초 (200밀리초)
-        self.dash_cooldown = 1500  # 대쉬 쿨타임: 1.5초 (1500밀리초)
+        self.dash_duration = PLAYER_DASH_DURATION_MS
+        self.dash_cooldown = PLAYER_DASH_COOLDOWN_MS
         
-        self.last_dash_time = -1500 # 게임 시작하자마자 바로 대쉬할 수 있게 설정
+        self.last_dash_time = -PLAYER_DASH_COOLDOWN_MS
         self.is_dashing = False    # 현재 대쉬 중인지 상태를 저장
         self.dash_end_time = 0     # 대쉬가 끝나는 시각을 기록할 변수
 
@@ -35,8 +36,16 @@ class Player:
     @staticmethod
     def hitboxes_for_position(x, y, width, height):
         """플레이어의 월드 좌표에서 머리/몸통 히트박스를 계산합니다."""
-        head = pygame.Rect(x + width // 4, y, width // 2, height // 3)
-        body = pygame.Rect(x, y + height // 3, width, (height // 3) * 2)
+        head_width = round(width * HEAD_HITBOX_WIDTH_RATIO)
+        head_height = round(height * HEAD_HITBOX_HEIGHT_RATIO)
+        head = pygame.Rect(x + (width - head_width) // 2, y, head_width, head_height)
+        inset = round(width * BODY_HITBOX_INSET_RATIO)
+        body = pygame.Rect(
+            x + inset,
+            y + head_height,
+            width - inset * 2,
+            height - head_height,
+        )
         return head, body
 
     def _update_hitboxes(self):
@@ -55,7 +64,7 @@ class Player:
 
         if hit_part == "head":
 
-            self.Hp = max(0, self.Hp - max(0, int(damage)) * 10) # 헤드샷이 즉사였나
+            self.Hp = max(0, self.Hp - max(0, int(damage)) * HEADSHOT_DAMAGE_MULTIPLIER)
         elif hit_part == "body":
             self.Hp = max(0,self.Hp - max(0,int(damage)))
         return hit_part
@@ -100,7 +109,8 @@ class Player:
                 dx = self.dash_dir_x
                 dy = self.dash_dir_y
         else:
-            speed = self.normal_speed
+            sprinting = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+            speed = self.sprint_speed if sprinting else self.normal_speed
 
         # 4. [수정 포인트] 계산된 최종 이동량(방향 * 속도)을 Move 함수로 전달!
         final_dx = dx * speed
